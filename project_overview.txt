@@ -1,0 +1,158 @@
+TRANSNATIONAL OLIGARCHIC CAPTURE: AN ABM/SD MODEL
+====================================================
+Project overview -- last updated after prof meeting, core-change: countries
+are now agents in their own right, not passive SD-only objects.
+
+
+1. CORE QUESTION (THESIS)
+--------------------------
+Under what conditions does transnational oligarchic capture -- via pooled
+capital, alliances, and the civil-to-ruling transition -- tip into runaway
+consolidation (a small number of oligarchic networks dominating multiple
+states), versus settle into a competitive, multipolar equilibrium?
+
+The explicit alternative we are arguing against: that capture consolidation
+is inevitable once cross-border alliances are possible. The model needs at
+least one built-in counterbalancing force (backlash/detection) so that the
+outcome is genuinely conditional on parameters, not a foregone conclusion
+baked into the mechanism.
+
+
+2. GOAL / SCOPE
+-----------------
+Target: publishable in an undergraduate research journal.
+Framing: a minimal, clearly-explained mechanism and its phase-transition
+behavior -- NOT a fully realistic, richly-calibrated model. We cannot
+validate against real cross-national capture data (it barely exists in
+usable form), so the paper's value has to come from structural plausibility
+and sensitivity analysis (in the tradition of exploratory SD work like
+World3/Limits to Growth), not point prediction.
+
+Primary claim to demonstrate: capture consolidation is CONDITIONAL on
+institutional/backlash strength, not inevitable.
+  -> Primary parameter to sweep: backlash/detection sensitivity.
+Secondary claim, if time allows: origin-wealth asymmetry between allying
+oligarchs determines whether alliances are genuinely mutual or let big
+players absorb small ones.
+Stretch goal, if time allows: adaptive oligarchs that learn to choose
+between indoctrination-style investment and more cautious/hedged
+investment, turning the static phase diagram into a strategic one.
+
+
+3. THEORETICAL GROUNDING
+--------------------------
+- Winters, "Oligarchy" (2011) -- definitional anchor. Distinguishes RULING
+  oligarchs (direct political power) from CIVIL oligarchs (power through
+  legal/economic institutions -- property law, courts, lobbying). Our two
+  oligarch types map directly onto this rather than inventing new
+  vocabulary.
+- "Company-state" concept (historically applied to the East India Company,
+  extended to United Fruit/Chiquita in Central America) -- the sharper term
+  for a civil oligarch/corporation exercising quasi-sovereign power abroad.
+- Piketty, "Capital in the Twenty-First Century" -- the r > g engine behind
+  the capital-accumulation stocks.
+- Turchin's Political Stress Indicator (Secular Cycles; Ages of Discord) --
+  borrowed as a STRUCTURAL template only (aggregate pressure = combination
+  of a few macro drivers, computed top-down rather than summed from
+  individual-citizen agents), not his calibrated coefficients, which are
+  fitted to a different historical dataset.
+- Post-Soviet 1990s privatization -- empirical precedent for collapse as a
+  discrete, uneven reallocation event (assets suddenly redistributed to
+  whoever is positioned to grab them) rather than smooth decay. Also the
+  historical origin of the modern use of "oligarch."
+- Charles Tilly, "War Making and State Making as Organized Crime" (1985) --
+  protection-racket framing of extraction, useful comparative parallel for
+  the capture mechanic.
+- Existing ABMs to build on / differentiate from: the OLIGO model (Mason &
+  Sengupta, oligarchs + elections) and the Ukrainian oligarchic-economy ABM
+  (arXiv, firm-network capture). Neither models cross-border capture or
+  capital flight as linked decisions -- that combination is our gap.
+
+
+4. MODEL ARCHITECTURE
+------------------------
+Hybrid ABM/SD: Country and Oligarch are AGENTS (heterogeneous, make
+discrete decisions, hold individual histories); the attributes on each
+agent are SD-STYLE STOCKS governed by continuous accumulation/decay
+equations. Alliances are a third, lightweight relational object between
+oligarch pairs.
+
+Baseline scope: 5 countries, 0-2 oligarchs per country (sampled at init).
+
+STOCKS
+  Oligarch.capital              -- liquid + illiquid wealth
+  Oligarch.offshore_capital     -- capital flight destination (one-way in
+                                    baseline -- flagged simplification)
+  Oligarch.foreign_capture[c]   -- influence held over foreign country c
+  Oligarch.ruling_status        -- 0 (civil) -> 1 (ruling), via seizure
+  Country.domestic_capture      -- aggregate policy control within country
+  Country.backlash_pressure     -- instability pressure (two channels: see
+                                    below)
+  Alliance.goodwill             -- trust between two allied oligarchs
+
+FLOWS (see model_core.py World.step() docstring for the authoritative list)
+  1. return_on_capital        -> capital           (boosted by domestic_capture: R1 loop)
+  2. capital_flight           -> capital -> offshore_capital
+  3. capture_investment       -> capital -> domestic_capture
+  4. capture_decay            -> drains domestic_capture
+  5. joint_capture_investment -> pooled capital -> foreign_capture (boosted by goodwill: R2 loop)
+  6. joint_deals              -> foreign_capture activity -> goodwill
+  7. goodwill_decay           -> drains goodwill
+  8. immiseration channel     -> domestic_capture -> backlash_pressure
+  9. exclusion channel        -> foreign_capture -> backlash_pressure
+  10. seizure                 -> domestic_capture -> ruling_status
+      (suppressed by backlash_pressure: perceived risk of seizing power)
+  11. collapse_event          -> backlash_pressure crosses collapse_threshold
+      -> drains domestic_capture + capital, frees assets for new entrants
+
+INITIALIZATION RULE
+  Oligarch starting capital and starting oligarch_type are both functions
+  of home country's baseline_wealth (richer countries -> better-capitalized
+  oligarchs, and plausibly a different civil/ruling split). Current code
+  uses placeholder distributions -- needs a deliberate functional form.
+
+PARAMETERS TO SAMPLE HETEROGENEOUSLY PER COUNTRY (not stocks)
+  baseline_wealth, institutional_resilience, collapse_threshold,
+  propensity_to_dissatisfaction (if kept separate from backlash inputs)
+
+
+5. OPEN QUESTIONS / DECISIONS STILL NEEDED
+---------------------------------------------
+- Collapse: hard threshold on backlash_pressure, or a probability that
+  rises with pressure? (post-Soviet case suggests real-world behavior may
+  be closer to a hard bifurcation)
+- Alliance defection: purely passive goodwill decay, or also a discrete
+  "betrayal" event an oligarch can actively choose?
+- Ruling_status downstream effects: does becoming a ruling oligarch change
+  the rules going forward (e.g. cheaper future domestic capture, but higher
+  backlash sensitivity)? Currently a dead end once reached.
+- Offshore_capital is one-way in the baseline (never reinvested) --
+  acceptable simplification for v1, worth flagging explicitly as such.
+- How many countries/oligarchs scale beyond the 5-country, 0-2-oligarch
+  baseline before the ABM layer becomes the computational bottleneck.
+- Whether a single domestic "policy capture" stock per country is enough,
+  or whether bilateral trade/diplomatic mechanics need to be added (current
+  answer: out of scope, flag as future work, not built by default).
+
+
+6. NEXT STEPS
+---------------
+1. Resolve Section 5 open questions (especially collapse functional form --
+   this affects both Country.step logic and how "runaway consolidation" is
+   even measured).
+2. Implement World.step() flow equations against model_core.py's stub.
+3. Implement alliance formation/matching logic (currently no code decides
+   WHICH oligarchs ally with which -- needs a rule, e.g. proximity in
+   capital, shared target country, or random matching with acceptance
+   probability).
+4. Run the primary parameter sweep: backlash/detection sensitivity, low to
+   high, across many seeds. Look for a qualitative flip between
+   "consolidation" and "collapse resets the board" outcomes.
+5. If time allows: origin-wealth asymmetry sweep (secondary claim).
+6. If time allows: adaptive oligarch learning rule (indoctrinate vs. hedge)
+   as a stretch extension.
+7. Write up: lead with the definitional grounding (Winters' civil/ruling
+   split), state the gap relative to OLIGO/Ukrainian-ABM literature
+   explicitly, present the sweep result as the core finding, and list
+   Section 5's unresolved items as limitations/future work rather than
+   silently omitting them.
