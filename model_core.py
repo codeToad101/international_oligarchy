@@ -1,731 +1,609 @@
 """
-model_core.py
+model_core.py -- agent definitions and shared structure for the transnational
+oligarchic capture model.
 
-Baseline class and variable scaffolding for the transnational oligarchic
-capture model. Countries and Oligarchs are agents (ABM); the internal
-attributes on each are the SD-style stocks discussed in the design
-sessions (see project_overview.txt for the full stock-and-flow diagram
-this maps onto).
+TWO CORE AGENTS (every model version, M0 and beyond, uses these classes):
 
-This file defines STRUCTURE ONLY -- no update/step equations yet.
-World.step() is a stub. Use this as the scaffold to build the actual
-flow equations onto once the open questions in project_overview.txt
-(Section 5) are resolved.
+  Country   (the STATE)     owns: endowment, institutions (resilience,
+                            collapse threshold), backlash pressure, recovery
+                            status, aggregate capture.
+                            does: produces output, accumulates backlash,
+                            collapses (probabilistically).
+
+  Oligarch                  owns: type, home country, industry preferences,
+                            risk tolerance, liquid capital, offshore capital,
+                            positions and capture stock in every country.
+                            does: earns, settles insolvency, flees/divests
+                            under perceived risk, chooses deployment, absorbs
+                            seizure when a country collapses.
+
+RELATIONSHIPS (goodwill on EVERY relationship; symmetric for now):
+  oligarch <-> oligarch   Relations.G[a,b]  (O x O, G[a,b] == G[b,a])
+  state    <-> oligarch   Relations.S[o,c]  (O x C, incl. home country)
+Relations is a shared object that both agents reference, so the two ends of
+a relationship always see the same value (that is what "symmetric" means
+here). Agents read their own relationships through goodwill_with_* methods.
+Directed goodwill (A's view of B != B's view of A) is a parked extension.
+
+M0 SIMPLIFICATIONS (documented, revisitable):
+  * industry_investments and illiquid_assets are merged into ONE sunk,
+    seizable stock, Oligarch.positions[c, i].
+  * Capture is a dimensionless FRACTION of output (Oligarch.capture[c, i]).
+  * Country output is a per-tick pool from endowment x price (no depletion).
+  * DEFERRED fields kept on Country for continuity (unused in M0):
+    unclaimed_assets, scarcity_pressure, wealth_returned_to_population.
+
+RESEARCH FRAMING (as of the current project scope; see m0_notes.md and
+project_overview.txt for the full discussion):
+  The domestic capture contest (kmax, kappa, capture_adj, tullock_r) is
+  SCAFFOLDING, not a finding: its only job is to produce a plausible
+  baseline level of domestic capture so there is something for foreign
+  behavior to depart from. It is held constant, never swept.
+
+  UPDATE (civil/ruling asymmetry, own design, not from any paper): the type
+  distinction is now deliberately asymmetric, built entirely by REUSING
+  ruling_home_mult for three home-entanglement effects plus one new
+  parameter (civil_cost_mult) for civil's offsetting cost:
+    RULING, at home only: cheaper/more effective capture (existing),
+      MORE backlash contribution (visible, attributable to direct state
+      control), and MORE seizure exposure if their OWN home country
+      collapses (entangled with the fallen regime).
+    CIVIL, everywhere: pays civil_cost_mult x higher running costs on all
+      captured positions (legal defense, lobbying, intermediaries), but
+      gets relative protection at home on collapse BY COMPARISON to
+      ruling (civil_cost_mult does not appear in the collapse-exposure
+      term at all -- civil's home protection is implicit, not a separate
+      dial), reflecting that popular anger deflects to intermediaries and
+      the regime itself rather than to civil oligarchs directly.
+  This makes civil vs. ruling a real, asymmetric, two-dimensional tradeoff
+  (cost/vulnerability vs. effectiveness/exposure) rather than a null
+  result. A civil/ruling comparison is still run as a VERIFICATION check,
+  but the expectation changes accordingly (see type_verification_check in
+  m0_model.py): foreign-only rates (capture/havoc per unit of foreign
+  capital, which this asymmetry does not touch) should still show no
+  meaningful difference, since all of it is wired through HOME-country
+  effects; exit rate, domestic capture, and domestic backlash contribution
+  ARE now expected to differ by type, and should be interpreted as the
+  deliberate tradeoff above, not a bug.
+
+SOURCES (details/verification caveats in m0_notes.md):
+  Gordon (1954); Schaefer (1954); Clark (1990)  -- extraction
+  Tullock (1980); Hillman & Riley (1989)        -- contest share
+  Hellman, Jones & Kaufmann (2000)              -- bounded capture (motivation)
+  Turchin (2003); Turchin & Nefedov (2009)      -- stress-indicator structure
+  McFadden (1974); McKelvey & Palfrey (1995)    -- logit choice
+  Salton & McGill (1983)                        -- cosine similarity
+  Axelrod (1984)                                -- goodwill via joint activity
+                                                   (motivation only)
+  Law (2015)                                    -- common random numbers
+  OWN ASSUMPTIONS (not from any paper): collapse hazard, capture persistence,
+  capture-rent stream, backlash accumulation, flight/divest rules, seizure
+  fractions, AR(1) prices, the exit rule, ALL goodwill formulas and effect
+  sizes, and all numeric parameter values.
 """
+from __future__ import annotations
 
-import random
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 
-# Fixed industry set. Kept small and deliberately generic for the baseline
-# model rather than trying to be exhaustive -- extend later if the sweep
-# results suggest granularity matters. Every Country gets an
-# industry_endowment and industry_resource_stock entry for each of these.
-INDUSTRIES: List[str] = [
-    "agriculture",
-    "energy",
-    "mining",
-    "manufacturing",
-    "finance",
-    "technology",
-]
-
-# How many industries a country is a genuine "specialist" in (high
-# endowment) vs merely competent/weak at. Placeholder -- see
-# _sample_industry_profile docstring below for the reasoning and the
-# open question this raises.
-N_SPECIALTY_INDUSTRIES = 2
-
-# Bounds used when sampling endowment for specialty vs non-specialty
-# industries -- this now governs RESOURCE ABUNDANCE only (how big a
-# country's stock/capacity is in an industry), not extraction efficiency.
-# See CATCHABILITY_COEFFICIENT below for why efficiency was pulled out
-# into its own, non-country-specific constant.
-SPECIALTY_ENDOWMENT_RANGE = (0.6, 1.0)
-NONSPECIALTY_ENDOWMENT_RANGE = (0.0, 0.4)
-RESOURCE_STOCK_SCALE = 100.0
-
-# --- Extraction: Gordon-Schaefer bioeconomic harvest model -----------------
-# (Schaefer 1954 on the biological stock dynamics; Gordon 1954 on the
-# economics.) Harvest is a function of the HARVESTER's own effort and the
-# CURRENT stock, not a country-specific efficiency dial:
-#     harvest(oligarch, c, i) = CATCHABILITY_COEFFICIENT * investment * stock
-# and profit = INDUSTRY_PRICE[i] * harvest - investment (cost of effort).
-# CATCHABILITY_COEFFICIENT is a single constant shared by everyone -- no
-# country gets to be inherently "better" at converting money into
-# extracted value; the only thing that varies by country is how much
-# stock is actually there (industry_resource_stock/capacity, sampled via
-# industry_endowment above). This deliberately replaces an earlier design
-# where a country-level "endowment" multiplier played double duty as both
-# stock size AND extraction efficiency AND (via a third use) synthetic
-# GDP value -- collapsing three distinct things into one number. Not yet
-# wired into World.step().
-CATCHABILITY_COEFFICIENT = 0.02
-
-# Per-industry price used to (a) convert harvested quantity into oligarch
-# profit/capital, and (b) size industry_value (see Country.industry_value)
-# as capacity * price rather than from endowment. Deliberately varied
-# across industries so that a small-but-precious resource (e.g. a
-# diamonds-style industry) and a large-but-cheap one (e.g. a wheat-style
-# industry) can be told apart even at similar physical abundance --
-# PLACEHOLDER relative values, not calibrated to anything real.
-INDUSTRY_PRICE: Dict[str, float] = {
-    "agriculture": 1.0,
-    "energy": 3.0,
-    "mining": 4.0,
-    "manufacturing": 2.0,
-    "finance": 5.0,
-    "technology": 6.0,
-}
-
-# --- Capture mechanics (see Country.industry_value / industry_max_capture
-# / industry_capture docstrings) -----------------------------------------
-# Tullock (1980) contest-intensity parameter for splitting a captured
-# industry's value among competing oligarchs: share_i = x_i^r / sum(x_j^r).
-# r=1 is the proportional "lottery" contest; r>1 skews toward winner-take-
-# most; r<1 flattens toward an even split regardless of investment gap.
-# Starting at r=1 (the field's standard baseline -- direct empirical
-# measurement of real-world capture/rent-seeking contests is notoriously
-# hard to get, so most applied work defaults here for tractability rather
-# than from a settled estimate). Candidate future refinement: tie r to
-# Country.institutional_resilience instead of a global constant -- some
-# of the contest-success-function literature treats "discriminatory
-# power" as characterizing the institutional environment (how decisively
-# effort/money buys outcome) rather than a fixed universal number, which
-# would mean weak-institution countries get r > 1 (money buys decisive
-# dominance) and strong-institution countries stay near r = 1 or lower.
-# Not implemented -- flagged for later, per project_overview.txt Section 5.
-CAPTURE_CONTEST_INTENSITY = 1.0
-
-# Ceiling on how much of ANY industry's synthetic value can ever be
-# oligarchically captured, however much is invested -- represents an
-# irreducible informal/independent sector that capture cannot fully
-# absorb (empirically, even heavily "captured" economies keep functioning
-# rather than freezing entirely). Placeholder value, deliberately left
-# as-is for now -- revisit later.
-MAX_CAPTURABLE_FRACTION = 0.85
-
-# --- Resource stock regeneration / abuse (see
-# Country.industry_resource_capacity docstring) ---------------------------
-# Fraction of the gap between current stock and full capacity that
-# regenerates each tick when extraction stays below the abuse threshold.
-# Placeholder.
-RESOURCE_REGEN_RATE = 0.05
-
-# If a single tick's extraction from an industry's resource stock exceeds
-# this fraction of the REMAINING stock, treat it as abuse: rather than
-# just drawing the stock down (which would regenerate back), permanently
-# shrink industry_resource_capacity itself (the pool is damaged, not just
-# temporarily drawn on). Placeholder.
-RESOURCE_ABUSE_THRESHOLD_FRACTION = 0.5
-
-# --- Unclaimed-asset repurposing (post-collapse) --------------------------
-# Deliberately reuses the Gordon-Schaefer harvest SHAPE rather than
-# inventing a third mechanism: claiming freed illiquid assets is treated
-# as another harvest, against a different pool.
-#     claim = ASSET_CLAIM_RATE * investment * Country.unclaimed_assets[i]
-# This gets "nothing forces claiming to happen" for free -- if nobody
-# invests in that (country, industry), claim = 0 and the pool just sits
-# there indefinitely, no separate decay/expiry logic needed. It also
-# means multiple oligarchs investing in the same freshly-collapsed
-# industry compete for the same shrinking pool automatically (a
-# common-pool-resource / commons-scramble dynamic -- see Ostrom, and
-# module docstring further down), without a bespoke contest function.
-# Placeholder value, deliberately close to CATCHABILITY_COEFFICIENT in
-# order of magnitude since it's the same kind of "effort meets an
-# available pool" process -- not derived from anything.
-ASSET_CLAIM_RATE = 0.02
-
-# Once claimed, value can either be ABSORBED (added to the claimant's own
-# illiquid_assets -- they commit to running it, exposed to being seized
-# again in a future collapse) or STRIPPED (converted straight to liquid
-# capital -- asset-strip and move on, safer but no long-run upside).
-# Modeled as a linear function of the claimant's risk_tolerance rather
-# than a separate trait: risk_tolerance=1 -> fully absorbed;
-# risk_tolerance=0 -> fully stripped to liquid capital. Reuses an
-# existing Oligarch trait instead of adding new agent psychology, per
-# the instruction to aim for realistic bottom-up behavior without
-# building out a full state-internal ABM. Not yet wired into
-# World.step().
+INDUSTRIES = ["agriculture", "energy", "mining", "manufacturing", "finance", "technology"]
+NI = len(INDUSTRIES)
 
 
 class OligarchType:
-    """Distinguishes civil vs. ruling oligarchs (Winters' typology).
+    CIVIL = "civil"      # wealth-based influence, no direct control of the state
+    RULING = "ruling"    # holds/controls state office; home-capture advantage
 
-    CIVIL  -- exercises power through legal/economic institutions rather
-              than direct rule (e.g. Rothschild-style dynasties,
-              company-states like United Fruit/Chiquita).
-    RULING -- holds direct political power in a state (the more familiar
-              "technical" sense of oligarch in a captured state).
 
-    A civil oligarch can transition to ruling during the simulation via
-    the seizure flow (see Oligarch.ruling_status below).
+# ---------------------------------------------------------------------------
+# Parameters (all PLACEHOLDERS unless a source is noted)
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class Params:
+    # --- structure ---
+    n_countries: int = 5
+    oligs_per_country: int = 2
+    n_ticks: int = 100
+    n_specialty: int = 2
+    specialty_range: Tuple[float, float] = (0.6, 1.0)
+    nonspecialty_range: Tuple[float, float] = (0.0, 0.4)
+    ruling_prob: float = 0.3
+    capital_scale: float = 10.0
+    init_home_frac: float = 0.5         # share of initial capital placed at home (=> initial domestic influence)
+    a_ref: float = 2.0                  # position size at which "presence" ~ 0.76 (tanh scale)
+
+    # --- output pools / extraction [Gordon54, Schaefer54, Clark90] ---
+    price_bar: Tuple[float, ...] = (1.0, 1.6, 2.0, 1.4, 2.2, 2.5)
+    yield_scale: float = 0.7
+    q: float = 0.3
+    op_cost: float = 0.08
+    tullock_r: float = 1.0              # [Tullock80, HR89]
+
+    # --- capture [Tullock80, HR89, HJK00] ---
+    kmax: float = 0.85
+    kappa: float = 0.5
+    capture_adj: float = 0.3
+    capture_rent: float = 0.5
+    ruling_home_mult: float = 1.5       # REUSED for 3 ruling home-entanglement effects: capture
+                                         # effectiveness (existing), backlash vulnerability, and
+                                         # collapse exposure at home (both new; see m0_notes.md)
+    civil_cost_mult: float = 1.3        # ONE new param: civil oligarchs pay this multiple on running
+                                         # costs (legal defense/lobbying/intermediaries), domestic+foreign
+
+    # --- backlash [structure only: Turchin03] ---
+    gamma: float = 0.08                 # PRIMARY SWEEP PARAMETER
+    b_decay: float = 0.10
+    foreign_backlash_mult: float = 1.0
+    shock_sd: float = 0.03
+
+    # --- collapse / seizure (own) ---
+    h_max: float = 0.35
+    h_width: float = 0.08
+    seize_frac: float = 0.8
+    foreign_exposed: bool = True
+    resident_liquid_hit: float = 0.3
+    recovery_ticks: int = 5
+    recovery_output: float = 0.5
+
+    # --- prices ---
+    price_ar: float = 0.8
+    price_sd: float = 0.10
+
+    # --- goodwill: initialization (own) ---
+    home_bonus: float = 0.6
+    s_scale: float = 2.0
+    foreign_stigma: float = 0.1
+    init_overlap_coef: float = 3.0
+    same_country_bonus: float = 0.3
+    overlap_sign: float = -1.0          # -1: same-industry overlap breeds RIVALRY; +1: AFFINITY
+
+    # --- goodwill: dynamics (own; trimmed from 9 params to 5 -- see m0_notes.md) ---
+    gw_decay: float = 0.07              # shared reversion rate, G_oo and S both revert toward G0/S0 at this rate
+    lam_oo: float = 0.05                # shared build rate: drives BOTH the complementary-co-presence term
+                                         # (+lam_oo*joint) and the same-pool overlap term (overlap_sign*lam_oo*ovl)
+    lam_inv: float = 0.04                # S rises with visible investment
+    lam_cap: float = 0.15                # S falls with captured share of output
+    sigma_gw: float = 0.02               # shared shock sd for G_oo (symmetric) and S
+    # DROPPED: halo (vouching by liked locals). Not load-bearing for H-b/H-c; listed in
+    # m0_notes.md as a future extension (alongside propaganda) rather than defended here.
+
+    # --- goodwill: effects (own) ---
+    zeta_cap: float = 0.5
+    zeta_bl: float = 0.5
+    zeta_seize: float = 0.5
+    eta: float = 0.15
+    goodwill_pull: float = 0.05
+
+    # --- oligarch behavior ---
+    deploy_frac: float = 0.5
+    logit_lambda: float = 5.0           # [McFadden74, MP95]
+    perc_sd: float = 0.10
+    pref_alpha: float = 2.0
+    flight_gain: float = 0.5
+    flight_max: float = 0.5
+    divest_gain: float = 0.5
+    divest_max: float = 0.3
+    fire_sale_loss: float = 0.3
+    offshore_return: float = 0.02
+    exit_drawdown: float = 0.5          # exit if wealth falls >= this fraction below own recorded peak
+
+
+# ---------------------------------------------------------------------------
+# Random streams: fixed-shape draws each tick (common random numbers [Law15])
+# ---------------------------------------------------------------------------
+class Noise:
+    def __init__(self, seed: int, p: Params, n_olig: int):
+        s = np.random.SeedSequence(seed).spawn(7)
+        self.init = np.random.default_rng(s[0])
+        self._price, self._back, self._perc, self._coll, self._goo, self._gos = (
+            np.random.default_rng(x) for x in s[1:])
+        self.p, self.n = p, n_olig
+
+    def draw(self):
+        p, O = self.p, self.n
+        e_oo = np.triu(self._goo.standard_normal((O, O)), 1)
+        e_oo = e_oo + e_oo.T                                   # symmetric pair shocks
+        return (
+            self._price.standard_normal(NI),
+            self._back.standard_normal(p.n_countries),
+            self._perc.standard_normal((O, p.n_countries)),
+            self._coll.random(p.n_countries),
+            e_oo,
+            self._gos.standard_normal((O, p.n_countries)),
+        )
+
+
+def sigmoid(x):
+    return 1.0 / (1.0 + np.exp(-x))
+
+
+def cosine_similarity(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Pairwise cosine similarity between rows of a and rows of b [Salton83]."""
+    an = a / np.maximum(np.linalg.norm(a, axis=1, keepdims=True), 1e-12)
+    bn = b / np.maximum(np.linalg.norm(b, axis=1, keepdims=True), 1e-12)
+    return an @ bn.T
+
+
+def gini(x: np.ndarray) -> float:
+    x = np.sort(np.asarray(x, dtype=float))
+    n = len(x)
+    if n == 0 or x.sum() <= 0:
+        return 0.0
+    return float((2 * np.arange(1, n + 1) - n - 1).dot(x) / (n * x.sum()))
+
+
+# ---------------------------------------------------------------------------
+# Relationships: goodwill on every relationship (symmetric)
+# ---------------------------------------------------------------------------
+class Relations:
+    """Shared goodwill store referenced by both agent types.
+
+    G[a,b]  oligarch<->oligarch, symmetric, zero diagonal, in [-1,1]
+    S[o,c]  state<->oligarch (one value per relationship), in [-1,1]
+    G0, S0  initial attitudes; goodwill reverts toward these.
     """
-    CIVIL = "civil"
-    RULING = "ruling"
+
+    def __init__(self, G0: np.ndarray, S0: np.ndarray):
+        self.G0, self.S0 = G0, S0
+        self.G, self.S = G0.copy(), S0.copy()
+
+    @staticmethod
+    def initialize(p: Params, pref_share: np.ndarray, payoff_profile: np.ndarray,
+                   home: np.ndarray, home_mask: np.ndarray) -> "Relations":
+        """Initial attitudes from industrial interests and potential payoffs (own formulas)."""
+        O = pref_share.shape[0]
+        align = cosine_similarity(pref_share, payoff_profile)              # (O,C)
+        S0 = np.clip(p.home_bonus * home_mask + p.s_scale * (align - align.mean())
+                     - p.foreign_stigma * (~home_mask), -1.0, 1.0)
+        ov = cosine_similarity(pref_share, pref_share)
+        off = ~np.eye(O, dtype=bool)
+        same = (home[:, None] == home[None, :]).astype(float)
+        G0 = p.overlap_sign * p.init_overlap_coef * (ov - ov[off].mean()) + p.same_country_bonus * same
+        G0 = np.clip((G0 + G0.T) / 2.0, -1.0, 1.0)
+        np.fill_diagonal(G0, 0.0)
+        return Relations(G0, S0)
 
 
+# ---------------------------------------------------------------------------
+# AGENT 1: Country (the state)
+# ---------------------------------------------------------------------------
 @dataclass
 class Country:
-    """An agent representing a single state.
+    """The state as an agent.
 
-    Stocks (change over the simulation)
-    ------------------------------------
-    domestic_capture : float
-        Aggregate policy/regulatory control held by oligarchs operating
-        in this country. Fed by capture investment, drained by decay and
-        by collapse events.
-    backlash_pressure : float
-        Aggregate instability pressure. Two feeder channels are intended:
-        immiseration (extraction from the general population) and
-        counter-elite exclusion (rival elites shut out of captured
-        channels). The functional FORM is loosely inspired by the
-        structure of Turchin's Political Stress Indicator -- explicitly
-        NOT his calibrated coefficients, which are fitted to a different
-        historical dataset and shouldn't be imported as-is.
-    industry_resource_stock : Dict[str, float]
-        CURRENT extractable quantity of each industry's resource, keyed
-        by industry name. Unlike a one-way depleting stock, this now
-        REGENERATES each tick toward industry_resource_capacity at
-        RESOURCE_REGEN_RATE, as long as extraction in that tick stayed
-        below RESOURCE_ABUSE_THRESHOLD_FRACTION of the remaining stock --
-        i.e. ordinary use is sustainable and the pool recovers. Only
-        extraction ABOVE that threshold in a given tick ("abuse")
-        permanently damages industry_resource_capacity itself (see
-        below), which is what should eventually manifest as
-        Country.scarcity_pressure. Deliberately kept simple (a single
-        threshold, not a full stock-flow-with-lookback model) per the
-        instruction not to go too deep into scarcity mechanics.
-    industry_resource_capacity : Dict[str, float]
-        The CEILING industry_resource_stock regenerates toward -- think
-        of it as the industry's sustainable carrying capacity rather
-        than a one-time finite reserve. Starts equal to the initial
-        resource stock; only shrinks when abuse (see above) occurs.
-        This is what makes scarcity a real, if rare, one-way ratchet:
-        ordinary extraction is fully recoverable, but abusive extraction
-        erodes the ceiling itself and that erosion is not undone by the
-        regeneration flow.
-    industry_value : Dict[str, float]
-        Synthetic per-industry economic value (a GDP-style proxy),
-        keyed by industry name. Used only to size industry_max_capture
-        below -- NOT itself a capture target. Computed at init as
-        industry_resource_capacity[i] * INDUSTRY_PRICE[i] -- i.e. from
-        physical abundance and price, NOT from industry_endowment
-        directly. This was changed from an earlier design where value
-        was computed straight from endowment, which made one number
-        (endowment) simultaneously set stock size, extraction
-        efficiency, AND value -- collapsing three axes that should be
-        able to vary independently (e.g. a scarce-but-precious resource
-        vs. an abundant-but-cheap one) into one. Endowment now only
-        determines abundance (stock/capacity); price is what lets two
-        similarly-abundant industries differ in value.
-    industry_max_capture : Dict[str, float]
-        Ceiling on how much of industry_value can ever be under
-        oligarchic control in that industry, = industry_value[i] *
-        MAX_CAPTURABLE_FRACTION. Leaves a deliberate, permanent
-        irreducible independent/informal-sector floor so that "100%
-        oligarchic capture" of a country never literally means zero
-        other economic activity.
-    industry_capture : Dict[str, float]
-        CURRENT total captured value in each industry -- a stock, not
-        yet updated by any flow (World.step() is still a stub). Intended
-        update rule once implemented: total captured value saturates
-        toward industry_max_capture as aggregate oligarch investment in
-        that industry rises (a diminishing-returns curve, not a hard
-        cliff), and is then SPLIT among the individual oligarchs
-        investing there via a Tullock-style contest share (see
-        CAPTURE_CONTEST_INTENSITY): each oligarch's realized captured
-        amount is proportional to their investment raised to that
-        power, divided by the sum across all oligarchs investing in
-        that (country, industry) pair. Two consequences worth flagging:
-        (1) domestic_capture (below) can then simply be DEFINED as
-        sum(industry_capture.values()) rather than tracked as an
-        independent stock, resolving the open question about how
-        industry-level investment relates to the aggregate; (2) when a
-        new entrant invests in an already-captured industry, the
-        incumbent's realized share drops even though the incumbent
-        changed nothing -- that drop is the natural trigger for the
-        "existing oligarch responds unfavorably" mechanic, feeding
-        Alliance.goodwill (see Alliance docstring) or an equivalent
-        rivalry stock for un-allied competitors. NOTE this is a
-        distinct mechanism from resource EXTRACTION (see
-        Oligarch.industry_investments / CATCHABILITY_COEFFICIENT):
-        industry_capture is about regulatory/policy control, extraction
-        is about physical resource and profit. OPEN QUESTION, not yet
-        decided: should an oligarch's realized industry_capture share
-        also boost their effective extraction efficiency (i.e. political
-        capture buys preferential resource access, a reinforcing loop
-        directly relevant to the paper's thesis), or should the two
-        stay fully independent for v1?
-    unclaimed_assets : Dict[str, float]
-        Illiquid physical capital (factories, offices, equipment) freed
-        by a collapse event (see is_collapsed below), keyed by industry.
-        Populated when Country.is_collapsed triggers: every resident
-        oligarch's Oligarch.illiquid_assets in this country get zeroed
-        out and their value moves here. Deliberately NOT automatically
-        reclaimed by anyone -- claiming is modeled as another Gordon-
-        Schaefer-style harvest (see ASSET_CLAIM_RATE in the module
-        docstring): claim = ASSET_CLAIM_RATE * investment * this pool,
-        drawn down only by oligarchs who choose to invest here. If
-        nobody does, it sits idle indefinitely -- no forced flow, no
-        decay/expiry built in (deliberately, to avoid over-modeling a
-        state-internal process that isn't this paper's focus). Any
-        oligarch can claim here, including foreign ones already
-        investing in this country's industries -- a domestic collapse
-        becoming a cross-border capture opportunity falls directly out
-        of this without any extra machinery, which is thesis-relevant.
-        Not yet implemented in World.step().
-    domestic_capture : float
-        Aggregate policy/regulatory control held by oligarchs operating
-        in this country. Under the mechanism above this is intended to
-        equal sum(industry_capture.values()) once industry_capture is
-        actually computed by World.step() -- kept as its own field for
-        now since that flow isn't implemented yet.
-    backlash_pressure : float
-        Aggregate instability pressure, fed by THREE channels (not two):
-        immiseration, exclusion, and scarcity. Immiseration is now
-        explicitly a COMPOSITE of (a) the shortfall in
-        wealth_returned_to_population relative to extraction volume and
-        (b) the resource-consumption rate itself -- i.e. "does the
-        country still get the product of its own labor" AND "how much
-        is being taken out of the ground regardless." Exact combination
-        (sum vs. one scaling the other) is not yet decided -- see
-        project_overview.txt Section 5. Scarcity is kept as its own,
-        separate channel (Country.scarcity_pressure) rather than folded
-        into immiseration, since it should be able to trigger revolt
-        from pure resource exhaustion even if extraction was otherwise
-        being "fairly" shared -- functional FORM is loosely inspired by
-        the structure of Turchin's Political Stress Indicator --
-        explicitly NOT his calibrated coefficients, which are fitted to
-        a different historical dataset and shouldn't be imported as-is.
-    is_collapsed : bool
-        Whether a collapse event has been triggered. On collapse:
-        domestic_capture drains, the triggering (and other resident)
-        oligarchs' liquid capital takes a hit, and -- new -- every
-        resident oligarch's Oligarch.illiquid_assets in this country
-        are seized/abandoned and their value moves to
-        Country.unclaimed_assets (see below), where they sit available
-        for repurposing but are not automatically claimed by anyone.
-        Exact drain magnitudes and the claiming mechanism are not yet
-        implemented.
-    wealth_returned_to_population : float
-        Cumulative stock tracking how much of the wealth generated by
-        capture/extraction in this country has flowed back to the
-        general population (public goods, wages, reinvestment) versus
-        been extracted as oligarch capital/offshore capital. Feeds the
-        immiseration channel above.
-    scarcity_pressure : float
-        Backlash-pressure contribution specifically from abusive
-        resource depletion (industry_resource_capacity being damaged --
-        see industry_resource_stock/capacity above), kept per-industry
-        in principle but currently exposed as a single aggregate float
-        per country. NOT YET wired into backlash_pressure -- flow
-        equation not implemented.
-
-    Parameters (heterogeneous, sampled once at init -- NOT stocks)
-    ----------------------------------------------------------------
-    baseline_wealth : float
-        Starting macroeconomic wealth level. Determines the starting
-        capital of oligarchs originating here.
-    institutional_resilience : float
-        Country-specific resistance to capture and to backlash
-        escalating into collapse. Higher = harder to capture, harder to
-        destabilize.
-    collapse_threshold : float
-        Backlash pressure level at which a collapse event triggers.
-        Currently assumed to be a hard threshold -- whether it should
-        instead be a probability that rises with pressure is an open
-        question (see project_overview.txt Section 5).
-    industry_endowment : Dict[str, float]
-        Country's comparative advantage per industry, 0-1, keyed by
-        industry name (see module-level INDUSTRIES). Sampled ONCE at
-        init so countries are heterogeneous by design -- every country
-        gets 1-2 "specialty" industries with high endowment and the
-        rest low/mediocre (see World._sample_industry_profile). Governs
-        RESOURCE ABUNDANCE ONLY (how big industry_resource_stock/
-        capacity start out) -- it is deliberately NOT an extraction
-        efficiency multiplier: extraction efficiency is now a single
-        global CATCHABILITY_COEFFICIENT shared by every oligarch in
-        every country (see module docstring), so that "better resources"
-        means "more of it," never "objectively better at extracting it."
+    Fixed traits
+      idx, name
+      baseline_wealth          scales resident oligarchs' starting capital
+      institutional_resilience in [0.2,1]: makes capture harder and lets the
+                               state absorb pressure (faster backlash decay)
+      collapse_threshold       backlash level at which collapse hazard is 50% of h_max
+      industry_endowment (NI,) specialist/generalist endowments
+      payoff_profile (NI,)     endowment x price: the "potential payoffs" that
+                               initialize goodwill
+    Stocks / state
+      backlash_pressure        accumulated popular pressure from capture
+      recovery_left            ticks of reduced output after a collapse
+      collapse_count
+      industry_output (NI,)    this tick's output pool
+      industry_capture (NI,)   total captured fraction of each industry (all oligarchs)
+      domestic_capture         output-weighted captured fraction of the economy
+    DEFERRED (M1+, unused in M0): unclaimed_assets, scarcity_pressure,
+      wealth_returned_to_population
+    Relationships: goodwill_with_oligarchs() -> S[:, idx] (shared, symmetric).
     """
-
+    idx: int
     name: str
     baseline_wealth: float
     institutional_resilience: float
     collapse_threshold: float
-
-    domestic_capture: float = 0.0
+    industry_endowment: np.ndarray
+    payoff_profile: np.ndarray
     backlash_pressure: float = 0.0
-    is_collapsed: bool = False
-
-    industry_endowment: Dict[str, float] = field(default_factory=dict)
-    industry_resource_stock: Dict[str, float] = field(default_factory=dict)
-    industry_resource_capacity: Dict[str, float] = field(default_factory=dict)
-    industry_value: Dict[str, float] = field(default_factory=dict)
-    industry_max_capture: Dict[str, float] = field(default_factory=dict)
-    industry_capture: Dict[str, float] = field(default_factory=dict)
-    wealth_returned_to_population: float = 0.0
-    scarcity_pressure: float = 0.0
-    unclaimed_assets: Dict[str, float] = field(default_factory=dict)
-
-    # populated by World once oligarchs are assigned to their home country
+    recovery_left: int = 0
+    collapse_count: int = 0
+    industry_output: np.ndarray = field(default_factory=lambda: np.zeros(NI))
+    industry_capture: np.ndarray = field(default_factory=lambda: np.zeros(NI))
+    domestic_capture: float = 0.0
+    unclaimed_assets: np.ndarray = field(default_factory=lambda: np.zeros(NI))      # DEFERRED
+    scarcity_pressure: float = 0.0                                                   # DEFERRED
+    wealth_returned_to_population: float = 0.0                                       # DEFERRED
     resident_oligarch_ids: List[str] = field(default_factory=list)
+    relations: Optional[Relations] = field(default=None, repr=False)
+
+    # ---- properties ----
+    @property
+    def in_recovery(self) -> bool:
+        return self.recovery_left > 0
+
+    def goodwill_with_oligarchs(self) -> np.ndarray:
+        return self.relations.S[:, self.idx]
+
+    # ---- behavior ----
+    def produce(self, price: np.ndarray, p: Params) -> np.ndarray:
+        """Per-tick output pool: endowment x yield x price, reduced during recovery."""
+        mult = p.recovery_output if self.in_recovery else 1.0
+        self.industry_output = self.industry_endowment * p.yield_scale * price * mult
+        return self.industry_output
+
+    def hazard(self, backlash, p: Params):
+        """Probabilistic collapse hazard (own logistic form; width->0 is a hard threshold)."""
+        return p.h_max * sigmoid((backlash - self.collapse_threshold) / p.h_width)
+
+    def update_backlash(self, load: float, shock_eps: float, p: Params) -> None:
+        """Backlash stock: decays (faster with resilience), fed by capture load + shock [Turchin03 structure]."""
+        decay = p.b_decay * (1.0 + self.institutional_resilience)
+        self.backlash_pressure = max(0.0, (1 - decay) * self.backlash_pressure
+                                     + p.gamma * load + p.shock_sd * shock_eps)
+
+    def check_collapse(self, u: float, p: Params) -> bool:
+        """Collapse if the uniform draw falls under the hazard. Resets pressure, starts recovery."""
+        if u < self.hazard(self.backlash_pressure, p):
+            self.backlash_pressure = 0.0
+            self.recovery_left = p.recovery_ticks
+            self.collapse_count += 1
+            return True
+        self.recovery_left = max(self.recovery_left - 1, 0)
+        return False
 
 
+# ---------------------------------------------------------------------------
+# AGENT 2: Oligarch
+# ---------------------------------------------------------------------------
 @dataclass
 class Oligarch:
-    """An agent representing a single oligarch (civil or ruling).
+    """The oligarch as an agent.
 
-    Stocks
-    ------
-    capital : float
-        LIQUID wealth held onshore -- cash/fluid capital an oligarch can
-        move, invest, or flee with. Previously documented as "liquid +
-        illiquid combined"; split out because collapse needs to treat
-        the two differently (see illiquid_assets below and
-        Country.unclaimed_assets).
-    illiquid_assets : Dict[str, Dict[str, float]]
-        Physical/fixed capital (factories, offices, equipment) this
-        oligarch holds in each (country, industry): {country_name:
-        {industry_name: value}}. Distinct from capital (liquid) and from
-        industry_investments (ongoing effort/spend, see below) -- this
-        represents capital that has hardened into sunk, illiquid plant.
-        Exact accumulation rule not yet decided (e.g. some fraction of
-        cumulative industry_investments converts to illiquid_assets over
-        time) -- flagged as an open question. What IS decided: only
-        illiquid_assets get seized/frozen on a Country collapse event
-        (moved to Country.unclaimed_assets) -- liquid capital and
-        offshore_capital are a separate concern the oligarch may already
-        have moved out of reach.
-    offshore_capital : float
-        Capital moved out of reach of the home country via capital
-        flight. One-way in this baseline (nothing flows back in) --
-        flagged as a simplification to revisit.
-    foreign_capture : Dict[str, float]
-        Degree of captured influence held over each foreign country,
-        keyed by country name.
-    industry_investments : Dict[str, Dict[str, float]]
-        Amount invested by this oligarch into each industry, broken
-        out per country: {country_name: {industry_name: amount}}. This
-        includes the oligarch's home country (domestic investment) as
-        well as any foreign countries they invest in. This single stock
-        now has to feed TWO separate mechanisms, which is worth being
-        explicit about:
-        (1) EXTRACTION (Gordon-Schaefer bioeconomic harvest model --
-        Schaefer 1954 / Gordon 1954): harvest = CATCHABILITY_COEFFICIENT
-        * investment * Country.industry_resource_stock[i]; profit =
-        INDUSTRY_PRICE[i] * harvest - investment. Effort (this oligarch's
-        own investment) and current stock are the only two inputs --
-        there is no country-specific "efficiency" dial (see module
-        docstring for why that was deliberately removed). This is what
-        feeds Oligarch.capital and Country.wealth_returned_to_population.
-        (2) CAPTURE (Tullock-style contest, see Country.industry_capture
-        and CAPTURE_CONTEST_INTENSITY): the same investment figure is
-        also the effort input to a separate contest determining this
-        oligarch's share of regulatory/policy capture in that industry,
-        which is what domestic_capture/foreign_capture are defined from.
-        OPEN QUESTION, not yet decided: does one investment figure
-        really drive both mechanisms identically, or should extraction
-        effort and capture effort be split into two separate stocks
-        (an oligarch might spend to extract resources without bothering
-        to buy political influence, or vice versa)? Kept as ONE stock
-        for now since that's the simpler v1 default, not because the
-        question is resolved.
-    ruling_status : float
-        0.0 = purely civil, rises toward 1.0 via the seizure flow, fed
-        by domestic_capture and suppressed by the home country's
-        backlash_pressure (higher perceived risk = harder to seize
-        power outright). Not yet clear what changes once ruling_status
-        is high -- open question.
-
-    Parameters (heterogeneous, sampled once at init)
-    ------------------------------------------------
-    oligarch_type : str
-        One of OligarchType.CIVIL / OligarchType.RULING at init; can
-        change via ruling_status crossing a threshold during the run.
-    home_country : str
-        Name of the originating Country -- sets starting capital scale.
-    risk_tolerance : float
-        Shapes willingness to pursue capital flight / power seizure
-        under a given backlash_pressure level. Also now governs the
-        absorb-vs-strip split when claiming unclaimed_assets (see
-        ASSET_CLAIM_RATE in the module docstring): higher risk_tolerance
-        -> more of what's claimed is absorbed into illiquid_assets
-        (commit to running it); lower -> more is stripped straight to
-        liquid capital (safer, no long-run upside). Reused deliberately
-        rather than adding a separate trait for this.
+    Fixed traits
+      oligarch_id, idx, home_country (country idx)
+      oligarch_type            CIVIL or RULING (ruling => home capture multiplier)
+      risk_tolerance in [0,1]  maps to flight/divest threshold on B/theta: 0.4 + 0.8*tol
+      industry_preferences (NI,) shares summing to 1; weight allocation choices
+    Stocks / state
+      capital                  liquid, deployable
+      offshore_capital         safe from seizure, earns offshore_return, one-way in M0
+      positions (C,NI)         sunk, seizable stock per (country, industry). Stands in for
+                               both industry_investments and illiquid_assets in M0.
+      capture (C,NI)           captured fraction of each (country, industry) output
+      seized_total             cumulative position value lost to seizure
+      initial_wealth, peak_wealth, max_drawdown   (exit bookkeeping)
+    Relationships: goodwill_with_state() -> S[idx,:]; goodwill_with_peers() -> G[idx,:]
     """
-
+    idx: int
     oligarch_id: str
-    home_country: str
+    home_country: int
     oligarch_type: str
-    capital: float
     risk_tolerance: float
-
+    industry_preferences: np.ndarray
+    capital: float
+    n_countries: int
     offshore_capital: float = 0.0
-    ruling_status: float = 0.0
-    industry_investments: Dict[str, Dict[str, float]] = field(default_factory=dict)
-    illiquid_assets: Dict[str, Dict[str, float]] = field(default_factory=dict)
-    foreign_capture: Dict[str, float] = field(default_factory=dict)
+    positions: Optional[np.ndarray] = None
+    capture: Optional[np.ndarray] = None
+    seized_total: float = 0.0
+    initial_wealth: float = 0.0
+    peak_wealth: float = 0.0
+    max_drawdown: float = 0.0
+    relations: Optional[Relations] = field(default=None, repr=False)
 
+    def __post_init__(self):
+        if self.positions is None:
+            self.positions = np.zeros((self.n_countries, NI))
+        if self.capture is None:
+            self.capture = np.zeros((self.n_countries, NI))
 
-@dataclass
-class Alliance: #NEED TO ADD COMPARISON of industry interests, alliances go better if invested
-                #in different industries, or if they are in the same industry?  Need to think about this more
-                #want to avoid competition, goal is monopoly... but the ends could alter the means
-    """A relationship between two oligarchs pooling capital for joint
-    foreign capture -- the "feudal lord" mutual-consolidation mechanic.
-
-    Stocks
-    ------
-    goodwill : float
-        Trust built up through joint deals. Intended to feed back into
-        the effectiveness of future joint foreign-capture investment,
-        and to decay without continued activity. Whether goodwill can
-        also be actively spent/broken by a discrete defection event
-        (vs. only passive decay) is an open question -- see
-        project_overview.txt Section 5.
-
-        NEW candidate source of a NEGATIVE goodwill shock (grievance):
-        under the capture-contest mechanism (see Country.industry_capture),
-        when one oligarch's investment in a (country, industry) another
-        oligarch already operates in causes that incumbent's realized
-        captured share to drop, that drop is a natural, already-computed
-        trigger for "the existing oligarch responds unfavorably." NOT
-        YET wired into any flow. Open question this raises: does this
-        only apply to already-ALLIED oligarch pairs (goodwill going
-        negative within an existing Alliance), or does displacement
-        between two oligarchs who were never allied need its own
-        lightweight rivalry/grievance relation instead of overloading
-        Alliance (which was designed for deliberately formed
-        partnerships, not adversarial pairs)?
-    """
-
-    oligarch_a: str
-    oligarch_b: str
-    goodwill: float = 0.0
+    # ---- properties ----
+    @property
+    def is_ruling(self) -> bool:
+        return self.oligarch_type == OligarchType.RULING
 
     @property
-    def key(self) -> Tuple[str, str]:
-        return tuple(sorted((self.oligarch_a, self.oligarch_b)))
+    def flight_threshold(self) -> float:
+        return 0.4 + 0.8 * self.risk_tolerance
+
+    @property
+    def pref_log(self) -> np.ndarray:
+        return np.log(np.maximum(self.industry_preferences * NI, 1e-6))
+
+    @property
+    def wealth(self) -> float:
+        return self.capital + self.offshore_capital + float(self.positions.sum())
+
+    def goodwill_with_state(self) -> np.ndarray:
+        return self.relations.S[self.idx]
+
+    def goodwill_with_peers(self) -> np.ndarray:
+        return self.relations.G[self.idx]
+
+    # ---- behavior ----
+    def settle(self, extraction: float, rent: float, p: Params) -> None:
+        """Book income, pay running costs, earn offshore return; liquidate positions if insolvent.
+        Civil oligarchs pay civil_cost_mult x op_cost on ALL positions (domestic+foreign) --
+        the transaction-cost cost of relying on legal defense/lobbying/intermediaries
+        rather than direct state control."""
+        cost_mult = p.civil_cost_mult if not self.is_ruling else 1.0
+        self.capital += extraction + rent - cost_mult * p.op_cost * float(self.positions.sum())
+        self.offshore_capital *= 1.0 + p.offshore_return
+        if self.capital < 0:
+            tot = float(self.positions.sum())
+            frac = min(1.0, -self.capital / max(tot * (1 - p.fire_sale_loss), 1e-9))
+            self.capital += frac * tot * (1 - p.fire_sale_loss)
+            self.positions *= (1.0 - frac)
+            self.capital = max(self.capital, 0.0)
+
+    def suffer_collapse(self, c: int, state_goodwill: float, p: Params) -> None:
+        """Country c collapsed: seize positions there (foreign holdings too if foreign_exposed),
+        reduced by the polity's goodwill toward this oligarch; residents also lose liquid capital.
+        Ruling oligarchs face ruling_home_mult EXTRA exposure specifically when their OWN home
+        country collapses (direct entanglement with the fallen regime) -- civil oligarchs get
+        relative protection here by comparison (they deflect blame to intermediaries/the regime
+        itself rather than being seen as the regime). Combined fraction is clipped to 1."""
+        exposed = 1.0 if p.foreign_exposed else float(self.home_country == c)
+        home_vuln = p.ruling_home_mult if (self.home_country == c and self.is_ruling) else 1.0
+        protection = 1.0 - p.zeta_seize * float(np.clip(state_goodwill, 0.0, 1.0))
+        frac = np.clip(p.seize_frac * exposed * home_vuln * protection, 0.0, 1.0)
+        loss = self.positions[c] * frac
+        self.seized_total += float(loss.sum())
+        self.positions[c] -= loss
+        if self.home_country == c:
+            self.capital *= (1 - p.resident_liquid_hit)
+        self.capture[c] = 0.0
+
+    def flee_and_divest(self, ratio: np.ndarray, p: Params) -> None:
+        """Perceived backlash ratio B/theta per country -> capital flight (liquid -> offshore)
+        and divestment of positions (at a fire-sale loss) when above the risk threshold."""
+        Wc = self.positions.sum(1)
+        risk = ((Wc * ratio).sum() + self.capital * ratio[self.home_country]) / max(Wc.sum() + self.capital, 1e-9)
+        flight = float(np.clip(p.flight_gain * (risk - self.flight_threshold), 0.0, p.flight_max))
+        moved = flight * self.capital
+        self.capital -= moved
+        self.offshore_capital += moved
+        dv = np.clip(p.divest_gain * (ratio - self.flight_threshold), 0.0, p.divest_max)
+        amt = self.positions * dv[:, None]
+        self.positions -= amt
+        self.capital += (1 - p.fire_sale_loss) * float(amt.sum())
+
+    def net_attractiveness(self, m_ext: np.ndarray, m_cap_shared: np.ndarray, mult_row: np.ndarray,
+                           hazard_row: np.ndarray, partner_row: np.ndarray, p: Params) -> np.ndarray:
+        """Myopic risk-adjusted marginal return per (country, industry):
+        marginal extraction + marginal capture rent - running cost - expected seizure loss
+        + pull from relationships (state goodwill and partners' presence)."""
+        S_row = self.goodwill_with_state()
+        base = np.ones(self.n_countries) if p.foreign_exposed else (np.arange(self.n_countries) == self.home_country).astype(float)
+        home_vuln = np.where((np.arange(self.n_countries) == self.home_country) & self.is_ruling,
+                              p.ruling_home_mult, 1.0)                       # ruling: more exposed AT HOME (reused param)
+        exposure = base * home_vuln * (1.0 - p.zeta_seize * np.clip(S_row, 0.0, 1.0))
+        cost_mult = p.civil_cost_mult if not self.is_ruling else 1.0
+        pull = p.goodwill_pull * (S_row + np.tanh(partner_row))
+        return (m_ext + m_cap_shared * mult_row[:, None] - cost_mult * p.op_cost
+                - (hazard_row * exposure * p.seize_frac)[:, None] + pull[:, None])
+
+    def deploy(self, net: np.ndarray, p: Params) -> None:
+        """Logit allocation of deploy_frac*capital over ALL (country, industry) pairs with net>0
+        [McFadden74, MP95]; industry preferences enter as log weights."""
+        D = p.deploy_frac * self.capital
+        logits = np.where(net > 0, self.pref_log[None, :] + p.logit_lambda * net, -np.inf)
+        mx = logits.max()
+        if not np.isfinite(mx):
+            return
+        ex = np.exp(logits - mx)
+        frac = ex / ex.sum()
+        dep = D * frac
+        self.positions += dep
+        self.capital -= float(dep.sum())
+
+    def record_wealth(self) -> float:
+        w = self.wealth
+        self.peak_wealth = max(self.peak_wealth, w)
+        self.max_drawdown = max(self.max_drawdown, 1.0 - w / max(self.peak_wealth, 1e-12))
+        return w
+
+    def exited(self, p: Params) -> bool:
+        """Exits if wealth ever fell >= exit_drawdown below its own recorded peak (own definition)."""
+        return self.max_drawdown >= p.exit_drawdown
 
 
+# ---------------------------------------------------------------------------
+# World: builds the agents and relations; shared structural computations.
+# Model versions (M0, M1, ...) subclass World and implement step().
+# ---------------------------------------------------------------------------
 class World:
-    """Container for the full model: countries, oligarchs, and alliances.
+    def __init__(self, p: Params, seed: int):
+        self.p = p
+        C = p.n_countries
+        O = C * p.oligs_per_country
+        self.C, self.O = C, O
+        self.noise = Noise(seed, p, O)
+        r = self.noise.init
 
-    Baseline scope: 5 countries, 0-2 oligarchs per country, sampled at
-    initialization. No step/update logic yet -- see World.step().
-    """
+        # ---- draws (order fixed for reproducibility) ----
+        baseline = r.uniform(0.2, 1.0, C)
+        rho = r.uniform(0.2, 1.0, C)
+        theta = r.uniform(0.5, 1.0, C)
+        endow = np.zeros((C, NI))
+        for c in range(C):
+            spec = r.choice(NI, size=p.n_specialty, replace=False)
+            e = r.uniform(*p.nonspecialty_range, NI)
+            e[spec] = r.uniform(*p.specialty_range, p.n_specialty)
+            endow[c] = e
+        payoff = endow * np.array(p.price_bar)[None, :]
+        home = np.repeat(np.arange(C), p.oligs_per_country)
+        ruling = r.random(O) < p.ruling_prob
+        capital = baseline[home] * r.uniform(0.5, 1.5, O) * p.capital_scale
+        tol = r.uniform(0.0, 1.0, O)
+        pref = r.dirichlet(np.full(NI, p.pref_alpha), O)
 
-    def __init__(self, n_countries: int = 5, seed: Optional[int] = None):
-        self.rng = random.Random(seed)
-        self.countries: Dict[str, Country] = {}
-        self.oligarchs: Dict[str, Oligarch] = {}
-        self.alliances: Dict[Tuple[str, str], Alliance] = {}
-        self._init_countries(n_countries)
-        self._init_oligarchs()
+        home_mask = np.zeros((O, C), dtype=bool)
+        home_mask[np.arange(O), home] = True
+        self.home, self.home_mask = home, home_mask
+        self.relations = Relations.initialize(p, pref, payoff, home, home_mask)
 
-    def _init_countries(self, n_countries: int) -> None:
-        for i in range(n_countries):
-            name = f"country_{i}"
-            country = Country(
-                name=name,
-                baseline_wealth=self.rng.uniform(0.2, 1.0),
-                institutional_resilience=self.rng.uniform(0.2, 1.0),
-                collapse_threshold=self.rng.uniform(0.5, 1.0),
-            )
-            self._sample_industry_profile(country)
-            self.countries[name] = country
+        # ---- agents ----
+        self.countries: List[Country] = [
+            Country(idx=c, name=f"country_{c}", baseline_wealth=float(baseline[c]),
+                    institutional_resilience=float(rho[c]), collapse_threshold=float(theta[c]),
+                    industry_endowment=endow[c].copy(), payoff_profile=payoff[c].copy(),
+                    relations=self.relations)
+            for c in range(C)]
+        self.oligarchs: List[Oligarch] = []
+        for o in range(O):
+            ol = Oligarch(idx=o, oligarch_id=f"oligarch_{o}", home_country=int(home[o]),
+                          oligarch_type=OligarchType.RULING if ruling[o] else OligarchType.CIVIL,
+                          risk_tolerance=float(tol[o]), industry_preferences=pref[o].copy(),
+                          capital=float(capital[o]), n_countries=C, relations=self.relations)
+            self.oligarchs.append(ol)
+            self.countries[home[o]].resident_oligarch_ids.append(ol.oligarch_id)
 
-    def _sample_industry_profile(self, country: Country) -> None:
-        """Sample industry_endowment, industry_resource_stock/capacity,
-        and industry_value/industry_max_capture for one country so it's
-        heterogeneous by construction: good at a couple of things,
-        mediocre/weak at the rest -- never uniformly good (or uniformly
-        bad) across the board.
+        # cached read-only views of fixed traits (for vectorized cross-agent computation)
+        self.rho = rho
+        self.theta = theta
+        self.endow = endow
+        self.ruling = ruling
 
-        Mechanism (PLACEHOLDER, deliberately simple for v1): pick
-        N_SPECIALTY_INDUSTRIES industries at random to be this country's
-        "specialties" and sample their endowment from
-        SPECIALTY_ENDOWMENT_RANGE; sample every other industry's
-        endowment from NONSPECIALTY_ENDOWMENT_RANGE. This is a discrete
-        specialist/generalist split rather than a smooth distribution
-        (e.g. a Dirichlet over industries) -- flagging that choice
-        explicitly since it affects how "comparative advantage" reads
-        in the sweep (hard specialization vs. graded advantage).
+        # ---- initial domestic influence: home positions, capture at contest-implied level ----
+        w0 = pref * payoff[home]
+        w0 = w0 / np.maximum(w0.sum(1, keepdims=True), 1e-12)
+        for o, ol in enumerate(self.oligarchs):
+            put = p.init_home_frac * ol.capital
+            ol.positions[ol.home_country, :] = put * w0[o]
+            ol.capital -= put
+            ol.initial_wealth = ol.wealth
+        self.write_capture(self.capture_terms(self.stack_positions())[3])
 
-        industry_resource_stock/capacity is set proportional to
-        endowment (specialists start with deeper reserves in their
-        specialty, consistent with "better resources" meaning more of
-        it -- NOT better at extracting it; see CATCHABILITY_COEFFICIENT
-        in the module docstring for why extraction efficiency is no
-        longer a country-specific number).
+    # ---- stacked views (agents remain the source of truth) ----
+    def stack_positions(self) -> np.ndarray:
+        return np.stack([o.positions for o in self.oligarchs])
 
-        industry_value (the synthetic-GDP proxy used only to size the
-        capture ceiling) is derived from industry_resource_capacity *
-        INDUSTRY_PRICE[i], NOT from endowment directly -- this is what
-        lets a scarce-but-valuable industry and an abundant-but-cheap
-        one be told apart, rather than endowment simultaneously setting
-        stock size, extraction efficiency, and value. industry_capture
-        and unclaimed_assets both start at 0.0 since no capture or
-        collapse has occurred yet.
-        """
-        specialties = self.rng.sample(INDUSTRIES, k=min(N_SPECIALTY_INDUSTRIES, len(INDUSTRIES)))
-        for industry in INDUSTRIES:
-            if industry in specialties:
-                endowment = self.rng.uniform(*SPECIALTY_ENDOWMENT_RANGE)
-            else:
-                endowment = self.rng.uniform(*NONSPECIALTY_ENDOWMENT_RANGE)
-            country.industry_endowment[industry] = endowment
+    def stack_capture(self) -> np.ndarray:
+        return np.stack([o.capture for o in self.oligarchs])
 
-            resource_stock = endowment * RESOURCE_STOCK_SCALE
-            country.industry_resource_stock[industry] = resource_stock
-            country.industry_resource_capacity[industry] = resource_stock
+    def write_capture(self, cap: np.ndarray) -> None:
+        for o, ol in enumerate(self.oligarchs):
+            ol.capture = cap[o].copy()
 
-            industry_value = resource_stock * INDUSTRY_PRICE[industry]
-            country.industry_value[industry] = industry_value
-            country.industry_max_capture[industry] = industry_value * MAX_CAPTURABLE_FRACTION
-            country.industry_capture[industry] = 0.0
-            country.unclaimed_assets[industry] = 0.0
+    # ---- capture contest [Tullock80, HR89, HJK00 motivation] ----
+    def capture_multiplier(self, A: np.ndarray):
+        """Effectiveness of each oligarch's effort in each country: institutions, ruling
+        status at home, state goodwill, and partners' signed presence (own formulas)."""
+        p, R = self.p, self.relations
+        P = np.tanh(A.sum(2) / p.a_ref)                          # presence (O,C)
+        partner = R.G @ P                                        # sum_b G_ab * presence_bc
+        base = np.where(self.home_mask & self.ruling[:, None], p.ruling_home_mult, 1.0)
+        mult = (base * (1.0 - self.rho)[None, :]
+                * np.clip(1.0 + p.zeta_cap * R.S, 0.2, None)
+                * np.clip(1.0 + p.eta * partner, 0.3, 2.0))
+        return mult, partner, P
 
-    def _init_oligarchs(self) -> None:
-        """Sample 0-2 oligarchs per country. Starting capital and type
-        distributions are PLACEHOLDERS -- both should ultimately be a
-        deliberate function of baseline_wealth per the "originating
-        country changes both kind and amount" design decision, not the
-        arbitrary weights used here."""
-        oligarch_counter = 0
-        for country in self.countries.values():
-            n_oligarchs = self.rng.choice([0, 1, 1, 2])  # placeholder weighting
-            for _ in range(n_oligarchs):
-                oligarch_id = f"oligarch_{oligarch_counter}"
-                oligarch_counter += 1
-                oligarch_type = (
-                    OligarchType.RULING
-                    if self.rng.random() < 0.3  # placeholder split
-                    else OligarchType.CIVIL
-                )
-                capital = country.baseline_wealth * self.rng.uniform(0.5, 1.5)
-                self.oligarchs[oligarch_id] = Oligarch(
-                    oligarch_id=oligarch_id,
-                    home_country=country.name,
-                    oligarch_type=oligarch_type,
-                    capital=capital,
-                    risk_tolerance=self.rng.uniform(0.0, 1.0),
-                )
-                country.resident_oligarch_ids.append(oligarch_id)
+    def capture_terms(self, A: np.ndarray):
+        p = self.p
+        mult, partner, P = self.capture_multiplier(A)
+        e = mult[:, :, None] * A
+        ew = e ** p.tullock_r
+        Xeff = e.sum(0)
+        K = p.kmax * (1.0 - np.exp(-p.kappa * Xeff))
+        cshare = ew / np.maximum(ew.sum(0), 1e-12)[None]
+        return mult, partner, P, K[None] * cshare, Xeff
 
-    def step(self) -> None:
-        """One simulation tick. NOT YET IMPLEMENTED.
-
-        Needs to encode, per oligarch/country, the flows from the
-        stock-and-flow design:
-          1. return_on_capital        -> Oligarch.capital
-          2. capital_flight           -> Oligarch.offshore_capital
-          3. capture_contest          -> Oligarch.industry_investments[c][i]
-             (input/effort) determines each oligarch's realized share of
-             Country.industry_capture[i], via a two-stage rule:
-               (a) aggregate captured value in (c,i) saturates toward
-                   Country.industry_max_capture[i] as total investment
-                   from all oligarchs there rises (diminishing returns,
-                   never reaches the ceiling);
-               (b) that captured value is split among the investing
-                   oligarchs via a Tullock-style contest share:
-                   x_o^r / sum_j(x_j^r), r = CAPTURE_CONTEST_INTENSITY.
-             Country.domestic_capture and Oligarch.foreign_capture[c]
-             are then DEFINED as sums of industry_capture / realized
-             shares across industries -- not independently updated.
-          4. capture_decay            -> drains industry_capture (and
-             therefore domestic_capture/foreign_capture) absent
-             continued investment
-          5. joint_capture_investment -> pooled capital -> foreign_capture
-             (boosted by goodwill: R2 loop)
-          6. joint_deals              -> foreign_capture activity -> goodwill
-          7. goodwill_decay           -> drains Alliance.goodwill
-          8. displacement_grievance   -> when flow #3 causes an
-             incumbent's realized industry_capture share to drop because
-             a rival increased their own investment, push
-             Alliance.goodwill negative (or an equivalent rivalry stock
-             for non-allied pairs -- open question, see Alliance
-             docstring) rather than only ever decaying passively.
-          9. resource_extraction      -> Gordon-Schaefer harvest per
-             oligarch per (country, industry): harvest =
-             CATCHABILITY_COEFFICIENT * industry_investments[c][i] *
-             Country.industry_resource_stock[i]; profit =
-             INDUSTRY_PRICE[i] * harvest - industry_investments[c][i].
-             Draws down industry_resource_stock[i] by the total harvest
-             across all oligarchs there; splits profit between
-             Oligarch.capital and Country.wealth_returned_to_population
-             (split ratio is the "does the country still enjoy the
-             product of its own labor" lever -- not yet defined).
-          10. resource_regeneration   -> Country.industry_resource_stock
-              recovers toward industry_resource_capacity at
-              RESOURCE_REGEN_RATE each tick, UNLESS a tick's extraction
-              exceeded RESOURCE_ABUSE_THRESHOLD_FRACTION of the
-              remaining stock, in which case industry_resource_capacity
-              itself is permanently reduced instead (abuse damages the
-              pool; ordinary use does not).
-          11. immiseration channel    -> COMPOSITE of (a) the shortfall
-              in wealth_returned_to_population relative to extraction
-              volume and (b) the resource-consumption rate itself ->
-              Country.backlash_pressure. Exact combination (summed vs.
-              one scaling the other) not yet decided -- see
-              project_overview.txt Section 5.
-          12. exclusion channel       -> foreign_capture -> backlash_pressure
-              (rival elites shut out of captured channels)
-          13. scarcity_channel        -> industry_resource_capacity being
-              damaged by abuse (flow #10) -> Country.scarcity_pressure ->
-              backlash_pressure. Kept separate from immiseration: a
-              country can revolt from pure resource exhaustion even if
-              extraction was otherwise being "fairly" shared.
-          14. seizure                 -> Oligarch.ruling_status
-              (fed by domestic_capture, suppressed by backlash_pressure)
-          15. collapse_event          -> backlash_pressure crosses
-              collapse_threshold; drains domestic_capture + resident
-              oligarchs' liquid capital; sets Country.is_collapsed; every
-              resident oligarch's illiquid_assets[this country] are
-              zeroed out and their value moves to Country.unclaimed_assets
-              per industry.
-          16. asset_repurposing       -> OPTIONAL, not guaranteed: any
-              oligarch (new entrant, survivor, or foreign investor
-              already active in this country) MAY claim unclaimed_assets
-              via the SAME Gordon-Schaefer harvest shape used for
-              resource extraction, against a different pool: claim =
-              ASSET_CLAIM_RATE * industry_investments[c][i] *
-              Country.unclaimed_assets[i]. If nobody invests there,
-              claim = 0 and the pool sits idle indefinitely -- no forced
-              flow, no decay/expiry. Multiple oligarchs investing in the
-              same freshly-collapsed industry draw down the same
-              shrinking pool automatically (a commons-scramble dynamic,
-              no separate contest function needed). Claimed value then
-              splits between Oligarch.illiquid_assets (absorbed -- commit
-              to running it) and Oligarch.capital (stripped -- convert
-              to liquid and move on), linearly by risk_tolerance (see
-              Oligarch docstring): risk_tolerance=1 fully absorbs,
-              risk_tolerance=0 fully strips.
-        """
+    def step(self):  # implemented by model versions (see m0_model.py)
         raise NotImplementedError
-
-
-if __name__ == "__main__":
-    world = World(n_countries=5, seed=0)
-    print(f"{len(world.countries)} countries, {len(world.oligarchs)} oligarchs")
-    for cname, country in world.countries.items():
-        endowment_str = ", ".join(
-            f"{k}={v:.2f}" for k, v in country.industry_endowment.items()
-        )
-        value_str = ", ".join(
-            f"{k}={v:.1f}" for k, v in country.industry_value.items()
-        )
-        ceiling_str = ", ".join(
-            f"{k}={v:.1f}" for k, v in country.industry_max_capture.items()
-        )
-        print(f"  {cname}: wealth={country.baseline_wealth:.2f}")
-        print(f"      endowment:   {endowment_str}")
-        print(f"      value:       {value_str}")
-        print(f"      max_capture: {ceiling_str}")
-    for oid, olig in world.oligarchs.items():
-        print(f"  {oid}: type={olig.oligarch_type}, home={olig.home_country}, "
-              f"capital={olig.capital:.2f}")

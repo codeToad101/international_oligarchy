@@ -1,12 +1,25 @@
+- KEY, states gap directly: Heathershaw, Pitcher & Soares de Oliveira (2023), "Transnational kleptocracy and the international political economy of authoritarianism," Journal of International Relations and Development 26(2): 215-223 (editorial introduction to a special issue).
+
+- Explicit about framing of international relationships between the rich: Camba & Epstein, From Duterte to Orbán: the political economy of autocratic hedging
 - Winters, "Oligarchy" (2011) — defines the civil/ruling oligarch split that the whole OligarchType distinction is built on. Cite it as the definitional anchor for two agent types.
 - Piketty, "Capital in the Twenty-First Century" (2013) — the r > g logic behind why capital compounds faster than the broader economy grows. Grounds the basic return_on_capital accumulation flow.
 - Turchin, Secular Cycles / Ages of Discord — structural template (not calibrated coefficients) for backlash_pressure as an aggregate of a few macro drivers computed top-down. Cite for the shape of the pressure indicator, with an explicit note that you're not importing his fitted numbers.
 - Tilly, "War Making and State Making as Organized Crime" (1985) — protection-racket framing of extraction; useful comparative language for describing what capture/extraction is in the writeup, even though it's not wired into a specific equation.
 - Tullock, "Efficient Rent-Seeking" (1980) — the contest success function (share = x^r / Σx^r) underlying Country.industry_capture's split among competing oligarchs. This is your core citation for the capture mechanism itself.
+- Hellman (1998), "Winners Take All: The Politics of Partial Reform in Postcommunist Transitions," World Politics 50(2), alternative view to Tullock suggests collaboration is more key to Oligarchic capture than competition
 - Hillman & Riley (1989) (and/or Hirshleifer 1989) — extends Tullock's single-winner contest to divisible prizes/shares, which is specifically what you need since multiple oligarchs split one industry's captured value rather than one winner taking all. Cite alongside Tullock, not instead of.
 - Hellman, Jones & Kaufmann, "Seize the State, Seize the Day" (World Bank, 2000) — empirical grounding that real-world state capture is measurable, economically damaging, but never total (post-Soviet capture reduced enterprise growth without freezing the economy). Justifies MAX_CAPTURABLE_FRACTION as a real ceiling rather than an arbitrary one.
 - Schaefer (1954) / Gordon (1954), the Gordon-Schaefer fishery model (see also Clark, Mathematical Bioeconomics, 1990 as a standard textbook reference) — harvest as a function of the harvester's own effort and current stock, not a resource-specific efficiency trait. This is your citation for the entire extraction mechanism (CATCHABILITY_COEFFICIENT) and for reusing that same shape for post-collapse asset claiming.
 - Ostrom, Governing the Commons (1990) — foundational common-pool-resource framing. Cite for Country.unclaimed_assets: an unowned pool drawn down by whoever shows up with effort, which is exactly the dynamic multiple oligarchs create when scrambling for a freshly-collapsed industry's freed assets.
+- Cosine similarity, used for preference overlap and payoff alignment: Salton & McGill (1983), Introduction to Modern Information Retrieval, McGraw-Hill.
+- Goodwill from repeated joint activity: Axelrod (1984), The Evolution of Cooperation.
+- two-nation elite interaction framework: Silve, "Democratic Spillovers"
+- Stochastic Networked Governance (SNG) model (Yadav & Yadav, 2026, arXiv:2604.19968) -- also addresses post-Soviet collapse, different topic
+- Counterargument (for logcal interaction): Glocal Capitalist Class: How Same-Nation Interlocks Facilitate Transnational Corporate Political Unity in Global Environmental Politics
+
+Note this is a Transnational Capitalist Class (TCC) model @ heart: https://www.econstor.eu/bitstream/10419/54081/1/636472469.pdf
+
+
 
 Two you might want to track down before final writeup: something on the winter-Soviet privatization literature specifically (for the 
 "collapse as discrete uneven reallocation" framing already in your doc — you may already have a source in mind), and, if you end up tying 
