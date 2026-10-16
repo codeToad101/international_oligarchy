@@ -2,13 +2,17 @@
 model_core.py -- agent definitions and shared structure for the transnational
 oligarchic capture model.
 
+Spec: project_overview.txt (slides = ground truth). Changed lines carry [A#]/[B#] tags.
+
 TWO CORE AGENTS (every model version, M0 and beyond, uses these classes):
 
   Country   (the STATE)     owns: endowment, institutions (resilience,
                             collapse threshold), backlash pressure, recovery
-                            status, aggregate capture.
-                            does: produces output, accumulates backlash,
-                            collapses (probabilistically).
+                            status, aggregate capture, RESOURCE HEALTH [A2].
+                            does: produces output, depletes/regenerates its
+                            resource stock [A4], accumulates backlash
+                            (capture load + scarcity [A5]), collapses
+                            (probabilistically).
 
   Oligarch                  owns: type, home country, industry preferences,
                             risk tolerance, liquid capital, offshore capital,
@@ -29,19 +33,22 @@ M0 SIMPLIFICATIONS (documented, revisitable):
   * industry_investments and illiquid_assets are merged into ONE sunk,
     seizable stock, Oligarch.positions[c, i].
   * Capture is a dimensionless FRACTION of output (Oligarch.capture[c, i]).
-  * Country output is a per-tick pool from endowment x price (no depletion).
-  * DEFERRED fields kept on Country for continuity (unused in M0):
-    unclaimed_assets, scarcity_pressure, wealth_returned_to_population.
+  * Country output is a per-tick pool = endowment x yield x price x
+    resource_health [A2]. resource_health depletes with extraction and with
+    abuse beyond h_star, and regenerates logistically [A4]. Oligarchs are
+    myopic about depletion (they react to CURRENT output, not to future
+    stock).
+  * DEFERRED fields kept on Country for continuity (unused):
+    unclaimed_assets, wealth_returned_to_population.
 
-RESEARCH FRAMING (as of the current project scope; see m0_notes.md and
-project_overview.txt for the full discussion):
+RESEARCH FRAMING (see project_overview.txt):
   The domestic capture contest (kmax, kappa, capture_adj, tullock_r) is
   SCAFFOLDING, not a finding: its only job is to produce a plausible
   baseline level of domestic capture so there is something for foreign
   behavior to depart from. It is held constant, never swept.
 
   UPDATE (civil/ruling asymmetry, own design, not from any paper): the type
-  distinction is now deliberately asymmetric, built entirely by REUSING
+  distinction is deliberately asymmetric, built entirely by REUSING
   ruling_home_mult for three home-entanglement effects plus one new
   parameter (civil_cost_mult) for civil's offsetting cost:
     RULING, at home only: cheaper/more effective capture (existing),
@@ -55,19 +62,12 @@ project_overview.txt for the full discussion):
       term at all -- civil's home protection is implicit, not a separate
       dial), reflecting that popular anger deflects to intermediaries and
       the regime itself rather than to civil oligarchs directly.
-  This makes civil vs. ruling a real, asymmetric, two-dimensional tradeoff
-  (cost/vulnerability vs. effectiveness/exposure) rather than a null
-  result. A civil/ruling comparison is still run as a VERIFICATION check,
-  but the expectation changes accordingly (see type_verification_check in
-  m0_model.py): foreign-only rates (capture/havoc per unit of foreign
-  capital, which this asymmetry does not touch) should still show no
-  meaningful difference, since all of it is wired through HOME-country
-  effects; exit rate, domestic capture, and domestic backlash contribution
-  ARE now expected to differ by type, and should be interpreted as the
-  deliberate tradeoff above, not a bug.
+  NOTE: civil_cost_mult applies ABROAD, so foreign capture/havoc LEVELS differ by type by
+  construction. The valid test of P (similar E-slope across types) is E x type slope
+  equality in the type-blind block (project_overview.txt 5.2, 6.4).
 
-SOURCES (details/verification caveats in m0_notes.md):
-  Gordon (1954); Schaefer (1954); Clark (1990)  -- extraction
+SOURCES (details/verification caveats in project_overview.txt Section 3):
+  Gordon (1954); Schaefer (1954); Clark (1990)  -- extraction, logistic regen
   Tullock (1980); Hillman & Riley (1989)        -- contest share
   Hellman, Jones & Kaufmann (2000)              -- bounded capture (motivation)
   Turchin (2003); Turchin & Nefedov (2009)      -- stress-indicator structure
@@ -77,9 +77,10 @@ SOURCES (details/verification caveats in m0_notes.md):
                                                    (motivation only)
   Law (2015)                                    -- common random numbers
   OWN ASSUMPTIONS (not from any paper): collapse hazard, capture persistence,
-  capture-rent stream, backlash accumulation, flight/divest rules, seizure
-  fractions, AR(1) prices, the exit rule, ALL goodwill formulas and effect
-  sizes, and all numeric parameter values.
+  capture-rent stream, backlash accumulation, scarcity weighting, abuse
+  threshold/damage form, flight/divest rules, seizure fractions, AR(1)
+  prices, the exit rule, ALL goodwill formulas and effect sizes, and all
+  numeric parameter values.
 """
 from __future__ import annotations
 
@@ -104,22 +105,34 @@ class OligarchType:
 class Params:
     # --- structure ---
     n_countries: int = 5
-    oligs_per_country: int = 2
-    n_ticks: int = 100
+    oligs_per_country: int = 5          # [A1] slides: 5 per country (was 2) -> 25 oligarchs
+    n_ticks: int = 100                  # placeholder; pilot sets run length (C4)
     n_specialty: int = 2
     specialty_range: Tuple[float, float] = (0.6, 1.0)
     nonspecialty_range: Tuple[float, float] = (0.0, 0.4)
-    ruling_prob: float = 0.3
+    ruling_frac: float = 0.5            # [A1] replaces ruling_prob. EXACT count = floor(frac*O)
+                                         # (12 ruling / 13 civil at O=25), random placement
     capital_scale: float = 10.0
     init_home_frac: float = 0.5         # share of initial capital placed at home (=> initial domestic influence)
     a_ref: float = 2.0                  # position size at which "presence" ~ 0.76 (tanh scale)
 
+    # [C4] PROVISIONAL CALIBRATION (random search, 3 seeds, overlap_sign=-1, main block only; needs wider validation):
+    #   yield_scale, q, op_cost, s_dep, abuse_coef, h_star, w_scar, s_regen, flight_gain, b_decay
     # --- output pools / extraction [Gordon54, Schaefer54, Clark90] ---
     price_bar: Tuple[float, ...] = (1.0, 1.6, 2.0, 1.4, 2.2, 2.5)
-    yield_scale: float = 0.7
-    q: float = 0.3
-    op_cost: float = 0.08
+    yield_scale: float = 1.689
+    q: float = 0.108
+    op_cost: float = 0.04
     tullock_r: float = 1.0              # [Tullock80, HR89]
+
+    # --- resource depletion / abuse [A1, A4] (logistic regen: Gordon-Schaefer; abuse form is OWN) ---
+    s_regen: float = 0.111               # logistic regeneration rate of resource_health
+    s_dep: float = 0.065                 # depletion per unit extraction fraction h
+    h_star: float = 0.607                 # ABUSE threshold on extraction fraction h = 1-exp(-qX)
+                                         # (h=0.5 <=> X = ln2/q ~ 2.3)
+    abuse_coef: float = 0.385             # extra per-tick damage rate per unit of (h - h_star)+
+    s_floor: float = 0.05               # regen floor: a depleted stock is not permanently dead
+    w_scar: float = 0.514                 # weight of scarcity in backlash load [A5]
 
     # --- capture [Tullock80, HR89, HJK00] ---
     kmax: float = 0.85
@@ -128,13 +141,13 @@ class Params:
     capture_rent: float = 0.5
     ruling_home_mult: float = 1.5       # REUSED for 3 ruling home-entanglement effects: capture
                                          # effectiveness (existing), backlash vulnerability, and
-                                         # collapse exposure at home (both new; see m0_notes.md)
-    civil_cost_mult: float = 1.3        # ONE new param: civil oligarchs pay this multiple on running
+                                         # collapse exposure at home (both new)
+    civil_cost_mult: float = 1.3        # civil oligarchs pay this multiple on running
                                          # costs (legal defense/lobbying/intermediaries), domestic+foreign
 
     # --- backlash [structure only: Turchin03] ---
-    gamma: float = 0.08                 # PRIMARY SWEEP PARAMETER
-    b_decay: float = 0.10
+    gamma: float = 0.08                 # PRIMARY SWEEP PARAMETER (scales capture load AND scarcity [A5])
+    b_decay: float = 0.159
     foreign_backlash_mult: float = 1.0
     shock_sd: float = 0.03
 
@@ -148,6 +161,7 @@ class Params:
     recovery_output: float = 0.5
 
     # --- prices ---
+    price_dynamics: bool = False        # [A1/A3] STATIC prices in v1. AR(1) below is used only if True
     price_ar: float = 0.8
     price_sd: float = 0.10
 
@@ -159,15 +173,13 @@ class Params:
     same_country_bonus: float = 0.3
     overlap_sign: float = -1.0          # -1: same-industry overlap breeds RIVALRY; +1: AFFINITY
 
-    # --- goodwill: dynamics (own; trimmed from 9 params to 5 -- see m0_notes.md) ---
+    # --- goodwill: dynamics (own; trimmed to 5 params) ---
     gw_decay: float = 0.07              # shared reversion rate, G_oo and S both revert toward G0/S0 at this rate
     lam_oo: float = 0.05                # shared build rate: drives BOTH the complementary-co-presence term
                                          # (+lam_oo*joint) and the same-pool overlap term (overlap_sign*lam_oo*ovl)
-    lam_inv: float = 0.04                # S rises with visible investment
-    lam_cap: float = 0.15                # S falls with captured share of output
-    sigma_gw: float = 0.02               # shared shock sd for G_oo (symmetric) and S
-    # DROPPED: halo (vouching by liked locals). Not load-bearing for H-b/H-c; listed in
-    # m0_notes.md as a future extension (alongside propaganda) rather than defended here.
+    lam_inv: float = 0.04               # S rises with visible investment
+    lam_cap: float = 0.15               # S falls with captured share of output
+    sigma_gw: float = 0.02              # shared shock sd for G_oo (symmetric) and S
 
     # --- goodwill: effects (own) ---
     zeta_cap: float = 0.5
@@ -181,13 +193,18 @@ class Params:
     logit_lambda: float = 5.0           # [McFadden74, MP95]
     perc_sd: float = 0.10
     pref_alpha: float = 2.0
-    flight_gain: float = 0.5
+    flight_gain: float = 0.329
     flight_max: float = 0.5
     divest_gain: float = 0.5
     divest_max: float = 0.3
     fire_sale_loss: float = 0.3
     offshore_return: float = 0.02
-    exit_drawdown: float = 0.5          # exit if wealth falls >= this fraction below own recorded peak
+
+    # --- exit [B2] ---
+    exit_floor_frac: float = 0.25       # exit when ACTIVE capital (liquid + positions, offshore EXCLUDED) is below
+                                         # this fraction of INITIAL active capital ...
+    exit_window: int = 10               # ... for this many consecutive ticks. Placeholders (pilot, C4).
+                                         # (Replaces the old drawdown-from-peak rule; exit_drawdown removed.)
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +223,8 @@ class Noise:
         e_oo = np.triu(self._goo.standard_normal((O, O)), 1)
         e_oo = e_oo + e_oo.T                                   # symmetric pair shocks
         return (
-            self._price.standard_normal(NI),
+            self._price.standard_normal(NI),                   # always drawn (fixed shapes => CRN),
+                                                               # used only if price_dynamics [A3]
             self._back.standard_normal(p.n_countries),
             self._perc.standard_normal((O, p.n_countries)),
             self._coll.random(p.n_countries),
@@ -283,14 +301,18 @@ class Country:
       payoff_profile (NI,)     endowment x price: the "potential payoffs" that
                                initialize goodwill
     Stocks / state
-      backlash_pressure        accumulated popular pressure from capture
+      backlash_pressure        accumulated popular pressure (capture load + scarcity)
       recovery_left            ticks of reduced output after a collapse
       collapse_count
       industry_output (NI,)    this tick's output pool
       industry_capture (NI,)   total captured fraction of each industry (all oligarchs)
       domestic_capture         output-weighted captured fraction of the economy
-    DEFERRED (M1+, unused in M0): unclaimed_assets, scarcity_pressure,
-      wealth_returned_to_population
+      resource_health (NI,)    [A2] resource stock health s in [0,1] per industry;
+                               scales output; NOT healed by collapse
+      scarcity_pressure        [A4/A5] value-weighted mean of (1 - health); feeds backlash
+      health_prev, abuse_rate  [A4] last tick's pre-update health and abuse intensity
+                               (read by havoc attribution in B3)
+    DEFERRED (unused): unclaimed_assets, wealth_returned_to_population
     Relationships: goodwill_with_oligarchs() -> S[:, idx] (shared, symmetric).
     """
     idx: int
@@ -306,8 +328,11 @@ class Country:
     industry_output: np.ndarray = field(default_factory=lambda: np.zeros(NI))
     industry_capture: np.ndarray = field(default_factory=lambda: np.zeros(NI))
     domestic_capture: float = 0.0
+    resource_health: np.ndarray = field(default_factory=lambda: np.ones(NI))        # [A2]
+    health_prev: np.ndarray = field(default_factory=lambda: np.ones(NI))            # [A4]
+    abuse_rate: np.ndarray = field(default_factory=lambda: np.zeros(NI))            # [A4]
+    scarcity_pressure: float = 0.0                                                   # [A4/A5] now ACTIVE
     unclaimed_assets: np.ndarray = field(default_factory=lambda: np.zeros(NI))      # DEFERRED
-    scarcity_pressure: float = 0.0                                                   # DEFERRED
     wealth_returned_to_population: float = 0.0                                       # DEFERRED
     resident_oligarch_ids: List[str] = field(default_factory=list)
     relations: Optional[Relations] = field(default=None, repr=False)
@@ -322,20 +347,50 @@ class Country:
 
     # ---- behavior ----
     def produce(self, price: np.ndarray, p: Params) -> np.ndarray:
-        """Per-tick output pool: endowment x yield x price, reduced during recovery."""
+        """Per-tick output pool: endowment x yield x price x resource_health [A2],
+        reduced during recovery."""
         mult = p.recovery_output if self.in_recovery else 1.0
-        self.industry_output = self.industry_endowment * p.yield_scale * price * mult
+        self.industry_output = (self.industry_endowment * p.yield_scale * price
+                                * self.resource_health * mult)
         return self.industry_output
+
+    def full_value(self, price: np.ndarray, p: Params) -> np.ndarray:
+        """[A4] Full-stock, full-recovery value V = endowment x yield x price (weights for
+        scarcity; also the value base for havoc attribution in B3)."""
+        return self.industry_endowment * p.yield_scale * price
+
+    def update_resource(self, h: np.ndarray, price: np.ndarray, p: Params) -> None:
+        """[A4] Update resource health after this tick's extraction, then scarcity [A5].
+
+        h = 1 - exp(-q X) is the extraction fraction per industry in this country.
+        abuse_rate = abuse_coef * max(0, h - h_star)          (own form)
+        s <- clip(s + s_regen*max(s, s_floor)*(1-s)           logistic regen [Gordon54/Schaefer54]
+                    - s_dep*h*s - abuse_rate*s, 0, 1)
+        Collapse does NOT heal the stock (the reduced-output recovery period still applies)."""
+        s = self.resource_health
+        self.health_prev = s.copy()
+        self.abuse_rate = p.abuse_coef * np.maximum(0.0, h - p.h_star)
+        regen = p.s_regen * np.maximum(s, p.s_floor) * (1.0 - s)
+        loss = (p.s_dep * h + self.abuse_rate) * s
+        self.resource_health = np.clip(s + regen - loss, 0.0, 1.0)
+        V = self.full_value(price, p)
+        tot = float(V.sum())
+        self.scarcity_pressure = (float((V * (1.0 - self.resource_health)).sum() / tot)
+                                  if tot > 0 else 0.0)
 
     def hazard(self, backlash, p: Params):
         """Probabilistic collapse hazard (own logistic form; width->0 is a hard threshold)."""
         return p.h_max * sigmoid((backlash - self.collapse_threshold) / p.h_width)
 
     def update_backlash(self, load: float, shock_eps: float, p: Params) -> None:
-        """Backlash stock: decays (faster with resilience), fed by capture load + shock [Turchin03 structure]."""
+        """Backlash stock: decays (faster with resilience), fed by gamma x (capture load +
+        w_scar x scarcity) [A5] plus a shock [Turchin03 structure]. Scarcity is the
+        slide-4 'low & middle class immiseration' input; it must already be set by
+        update_resource this tick."""
         decay = p.b_decay * (1.0 + self.institutional_resilience)
         self.backlash_pressure = max(0.0, (1 - decay) * self.backlash_pressure
-                                     + p.gamma * load + p.shock_sd * shock_eps)
+                                     + p.gamma * (load + p.w_scar * self.scarcity_pressure)
+                                     + p.shock_sd * shock_eps)
 
     def check_collapse(self, u: float, p: Params) -> bool:
         """Collapse if the uniform draw falls under the hazard. Resets pressure, starts recovery."""
@@ -366,8 +421,22 @@ class Oligarch:
       positions (C,NI)         sunk, seizable stock per (country, industry). Stands in for
                                both industry_investments and illiquid_assets in M0.
       capture (C,NI)           captured fraction of each (country, industry) output
-      seized_total             cumulative position value lost to seizure
-      initial_wealth, peak_wealth, max_drawdown   (exit bookkeeping)
+      [B1] value-loss accounting (cumulative seized_total/cum_*, and this-tick t_*). "Loss" = value
+        DESTROYED to the oligarch, not a transfer:
+          (1) seized_total    collapse seizure of positions
+          (2) cum_home_hit    resident liquid-capital hit when the HOME country collapses
+          (3) cum_forced_liq  fire-sale loss from forced (insolvency) liquidation
+          (4) cum_divest      fire-sale loss from voluntary, risk-driven divestment
+          cum_flight          capital moved offshore (a TRANSFER, not a loss)
+        S headline covariate = (1)+(2) over initial_active (collapse_loss_rel); robustness adds (3);
+        (4) is excluded as circular (it is the oligarch's own response to risk).
+      [B2] initial_active, active, exit_tick, below_count, exit_liq_loss, exit_transfer
+        Exit = ACTIVE capital (liquid + positions; offshore excluded) below exit_floor_frac x
+        initial_active for exit_window consecutive ticks. On exit the agent LEAVES THE STAGE:
+        positions are LIQUIDATED at the fire-sale rate (value destroyed = exit_liq_loss), capture is
+        zeroed, and liquid capital plus liquidation proceeds move offshore (exit_transfer, not counted as
+        flight); active=False and the agent skips every behavior (including offshore return). Arrays
+        keep their shape (CRN).
     Relationships: goodwill_with_state() -> S[idx,:]; goodwill_with_peers() -> G[idx,:]
     """
     idx: int
@@ -381,10 +450,26 @@ class Oligarch:
     offshore_capital: float = 0.0
     positions: Optional[np.ndarray] = None
     capture: Optional[np.ndarray] = None
-    seized_total: float = 0.0
+    # [B1] cumulative loss accounting (see class docstring)
+    seized_total: float = 0.0           # (1) collapse seizure of positions
+    cum_home_hit: float = 0.0           # (2) resident liquid hit at home collapse
+    cum_forced_liq: float = 0.0         # (3) forced-liquidation fire-sale loss
+    cum_divest: float = 0.0             # (4) voluntary divestment fire-sale loss
+    cum_flight: float = 0.0             # flight to offshore (transfer)
+    # [B1] this-tick trackers (zeroed by begin_tick)
+    t_seized: float = 0.0
+    t_home_hit: float = 0.0
+    t_forced_liq: float = 0.0
+    t_divest: float = 0.0
+    t_flight: float = 0.0
+    # [B2] exit bookkeeping
     initial_wealth: float = 0.0
-    peak_wealth: float = 0.0
-    max_drawdown: float = 0.0
+    initial_active: float = 0.0         # capital + positions at t=0 (offshore is 0 at t=0)
+    active: bool = True
+    exit_tick: Optional[int] = None
+    below_count: int = 0
+    exit_liq_loss: float = 0.0          # fire-sale loss on positions liquidated at exit
+    exit_transfer: float = 0.0          # liquid capital + liquidation proceeds moved offshore at exit
     relations: Optional[Relations] = field(default=None, repr=False)
 
     def __post_init__(self):
@@ -410,6 +495,21 @@ class Oligarch:
     def wealth(self) -> float:
         return self.capital + self.offshore_capital + float(self.positions.sum())
 
+    @property
+    def active_capital(self) -> float:
+        """[B2] Liquid capital + positions; OFFSHORE EXCLUDED (offshore is one-way, cannot fund a return)."""
+        return self.capital + float(self.positions.sum())
+
+    @property
+    def collapse_loss_cum(self) -> float:
+        """[B1] Headline S covariate numerator: seizure (1) + home liquid hit (2)."""
+        return self.seized_total + self.cum_home_hit
+
+    @property
+    def collapse_loss_rel(self) -> float:
+        """[B1] Collapse-driven loss scaled by initial active capital."""
+        return self.collapse_loss_cum / max(self.initial_active, 1e-12)
+
     def goodwill_with_state(self) -> np.ndarray:
         return self.relations.S[self.idx]
 
@@ -417,6 +517,11 @@ class Oligarch:
         return self.relations.G[self.idx]
 
     # ---- behavior ----
+    def begin_tick(self) -> None:
+        """[B1] Zero this-tick loss/flow trackers."""
+        self.t_seized = self.t_home_hit = self.t_forced_liq = self.t_divest = 0.0
+        self.t_flight = 0.0
+
     def settle(self, extraction: float, rent: float, p: Params) -> None:
         """Book income, pay running costs, earn offshore return; liquidate positions if insolvent.
         Civil oligarchs pay civil_cost_mult x op_cost on ALL positions (domestic+foreign) --
@@ -428,9 +533,15 @@ class Oligarch:
         if self.capital < 0:
             tot = float(self.positions.sum())
             frac = min(1.0, -self.capital / max(tot * (1 - p.fire_sale_loss), 1e-9))
-            self.capital += frac * tot * (1 - p.fire_sale_loss)
+            liquidated = frac * tot
+            loss = liquidated * p.fire_sale_loss                         # [B1] (3) forced-liquidation loss
+            self.t_forced_liq += loss
+            self.cum_forced_liq += loss
+            self.capital += liquidated * (1 - p.fire_sale_loss)
             self.positions *= (1.0 - frac)
-            self.capital = max(self.capital, 0.0)
+            self.capital = max(self.capital, 0.0)   # limited liability (ORIGINAL M0 behavior, untracked):
+                                                     # residual negative capital, possible only once positions
+                                                     # are exhausted, is forgiven
 
     def suffer_collapse(self, c: int, state_goodwill: float, p: Params) -> None:
         """Country c collapsed: seize positions there (foreign holdings too if foreign_exposed),
@@ -444,10 +555,15 @@ class Oligarch:
         protection = 1.0 - p.zeta_seize * float(np.clip(state_goodwill, 0.0, 1.0))
         frac = np.clip(p.seize_frac * exposed * home_vuln * protection, 0.0, 1.0)
         loss = self.positions[c] * frac
-        self.seized_total += float(loss.sum())
+        lost = float(loss.sum())
+        self.seized_total += lost                                        # [B1] (1) seizure
+        self.t_seized += lost
         self.positions[c] -= loss
         if self.home_country == c:
-            self.capital *= (1 - p.resident_liquid_hit)
+            hit = self.capital * p.resident_liquid_hit                   # [B1] (2) resident liquid hit
+            self.capital -= hit
+            self.cum_home_hit += hit
+            self.t_home_hit += hit
         self.capture[c] = 0.0
 
     def flee_and_divest(self, ratio: np.ndarray, p: Params) -> None:
@@ -459,10 +575,16 @@ class Oligarch:
         moved = flight * self.capital
         self.capital -= moved
         self.offshore_capital += moved
+        self.cum_flight += moved                                         # [B1] flight (transfer)
+        self.t_flight += moved
         dv = np.clip(p.divest_gain * (ratio - self.flight_threshold), 0.0, p.divest_max)
         amt = self.positions * dv[:, None]
         self.positions -= amt
-        self.capital += (1 - p.fire_sale_loss) * float(amt.sum())
+        amt_tot = float(amt.sum())
+        self.capital += (1 - p.fire_sale_loss) * amt_tot
+        loss = p.fire_sale_loss * amt_tot                                # [B1] (4) voluntary divestment loss
+        self.cum_divest += loss
+        self.t_divest += loss
 
     def net_attractiveness(self, m_ext: np.ndarray, m_cap_shared: np.ndarray, mult_row: np.ndarray,
                            hazard_row: np.ndarray, partner_row: np.ndarray, p: Params) -> np.ndarray:
@@ -494,14 +616,39 @@ class Oligarch:
         self.capital -= float(dep.sum())
 
     def record_wealth(self) -> float:
-        w = self.wealth
-        self.peak_wealth = max(self.peak_wealth, w)
-        self.max_drawdown = max(self.max_drawdown, 1.0 - w / max(self.peak_wealth, 1e-12))
-        return w
+        return self.wealth
 
-    def exited(self, p: Params) -> bool:
-        """Exits if wealth ever fell >= exit_drawdown below its own recorded peak (own definition)."""
-        return self.max_drawdown >= p.exit_drawdown
+    def exited(self, p: Optional[Params] = None) -> bool:
+        """[B2] True once the agent has left the stage (p accepted only for old call sites)."""
+        return self.exit_tick is not None
+
+    def check_exit(self, t: int, p: Params) -> bool:
+        """[B2] Floor-and-window exit on ACTIVE capital (offshore excluded). Call once per tick, AFTER
+        that tick's records are taken. Returns True on the tick the agent leaves the stage."""
+        if not self.active:
+            return False
+        if self.active_capital < p.exit_floor_frac * self.initial_active:
+            self.below_count += 1
+        else:
+            self.below_count = 0
+        if self.below_count >= p.exit_window:
+            self.leave_stage(t, p)
+            return True
+        return False
+
+    def leave_stage(self, t: int, p: Params) -> None:
+        """[B2] Absorbing exit: liquidate positions at the fire-sale rate (same rule as forced and
+        voluntary liquidation), zero capture, move liquid capital + proceeds offshore (exit_transfer;
+        NOT counted as flight), stop all behavior."""
+        self.exit_tick = t
+        pos = float(self.positions.sum())
+        self.exit_liq_loss = pos * p.fire_sale_loss
+        self.exit_transfer = self.capital + pos * (1.0 - p.fire_sale_loss)
+        self.offshore_capital += self.exit_transfer
+        self.capital = 0.0
+        self.positions[:] = 0.0
+        self.capture[:] = 0.0
+        self.active = False
 
 
 # ---------------------------------------------------------------------------
@@ -529,7 +676,10 @@ class World:
             endow[c] = e
         payoff = endow * np.array(p.price_bar)[None, :]
         home = np.repeat(np.arange(C), p.oligs_per_country)
-        ruling = r.random(O) < p.ruling_prob
+        # [A1] EXACT type split: floor(ruling_frac * O) ruling oligarchs, random placement
+        n_ruling = int(np.floor(p.ruling_frac * O + 1e-9))
+        ruling = np.zeros(O, dtype=bool)
+        ruling[r.choice(O, size=n_ruling, replace=False)] = True
         capital = baseline[home] * r.uniform(0.5, 1.5, O) * p.capital_scale
         tol = r.uniform(0.0, 1.0, O)
         pref = r.dirichlet(np.full(NI, p.pref_alpha), O)
@@ -569,6 +719,7 @@ class World:
             ol.positions[ol.home_country, :] = put * w0[o]
             ol.capital -= put
             ol.initial_wealth = ol.wealth
+            ol.initial_active = ol.capital + float(ol.positions.sum())      # [B2]
         self.write_capture(self.capture_terms(self.stack_positions())[3])
 
     # ---- stacked views (agents remain the source of truth) ----
@@ -604,6 +755,32 @@ class World:
         K = p.kmax * (1.0 - np.exp(-p.kappa * Xeff))
         cshare = ew / np.maximum(ew.sum(0), 1e-12)[None]
         return mult, partner, P, K[None] * cshare, Xeff
+
+    # ---- [B4] network embeddedness (per tick) ----
+    def embeddedness(self, A: np.ndarray) -> Dict[str, np.ndarray]:
+        """Signed net tie strength, per oligarch, from end-of-tick positions A (O,C,NI) and current G.
+
+        presence p_ic = tanh(position_ic / a_ref). Exited agents hold no positions, so p=0 and they drop out
+        of everyone's E automatically. Partners count regardless of HOME country (locals included).
+          E_foreign_i = sum_j G_ij * ( sum_{c != home_i} p_ic * p_jc ) / (O-1)    <- PRIMARY
+          E_all_i     = sum_j G_ij * ( sum_c p_ic * p_jc ) / (O-1)                <- robustness
+          E_pos_i / E_neg_i : the positive-G / negative-G parts of E_foreign_i (E_foreign = E_pos + E_neg)
+        The denominator is fixed at O-1, so scale does not change as agents exit. E = 0 means no
+        co-present partners OR exactly offsetting ties; check foreign presence separately in analysis."""
+        G = self.relations.G
+        P = np.tanh(A.sum(2) / self.p.a_ref)                             # (O,C)
+        Pf = P * (~self.home_mask)                                       # i's presence in countries FOREIGN to i
+        n = self.O - 1
+        W_f = Pf @ P.T                                                    # (O,O): partner j's presence any home
+        W_a = P @ P.T
+        np.fill_diagonal(W_f, 0.0)
+        np.fill_diagonal(W_a, 0.0)
+        return dict(
+            E_foreign=(G * W_f).sum(1) / n,
+            E_all=(G * W_a).sum(1) / n,
+            E_pos=(np.clip(G, 0.0, None) * W_f).sum(1) / n,
+            E_neg=(np.clip(G, None, 0.0) * W_f).sum(1) / n,
+        )
 
     def step(self):  # implemented by model versions (see m0_model.py)
         raise NotImplementedError

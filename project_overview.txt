@@ -1,474 +1,839 @@
-TRANSNATIONAL OLIGARCHIC CAPTURE: AN ABM/SD MODEL
-====================================================
-Project overview -- REVISED after the M0 build. Changes since the last
-version: (a) the core question is reframed around which oligarchic
-STRATEGIES (relationship structures, above all cooperation) are profitable
-and when they can be attained AND maintained; (b) Country and Oligarch are
-formally defined as the two core agents in model_core.py and every model
-version (M0, M1, ...) is built on them; (c) goodwill now exists on EVERY
-relationship (oligarch<->oligarch and state<->oligarch), replacing the
-lone Alliance.goodwill; (d) Section 5 items resolved by M0 are marked, and
-what M0 deliberately does NOT yet implement is listed explicitly.
+FROM CHIQUITA TO THE ANGLO-PERSIAN OIL COMPANY:
+INTERNATIONAL OLIGARCHIC INTERACTION -- A TRANSNATIONAL ABM
+===========================================================
+Project overview and model specification (CONSOLIDATED).
+
+This file REPLACES both the previous project_overview.txt and m0_notes.md.
+Model code lives in model_core.py and m0_model.py.
+
+GROUND-TRUTH RULE
+  The project-proposal SLIDES (17-621) are the source of truth. Where this
+  file departs from the slides, the departure is listed in Section 13 with
+  the reason. Where the CODE departs from this file, the gap is listed in
+  Section 10 as a [CODE-TODO]. The code was reworked in Batches A-C; Section 10 tracks what remains.
+
+STATUS TAGS (used throughout)
+  [SLIDES]    stated in the proposal slides (slide number given)
+  [AGREED]    decided in discussion after the slides
+  [PROPOSED]  recommended, not yet explicitly confirmed -- confirm or strike
+  [OPEN]      undecided
+  [CODE-TODO] this spec differs from the current code; code must change
+  [IMPLEMENTED] already in the code as described
 
 FILES
-  model_core.py   agent definitions (Country, Oligarch), Relations
-                  (goodwill store), Params, World (init + capture contest)
-  m0_model.py     M0 flow equations (M0World subclasses World) + diagnostics
-  m0_notes.md     M0 specification details, sources, results snapshot
+  model_core.py   agent definitions (Country, Oligarch), Relations (goodwill
+                  store), Params, World (init + capture contest)
+  m0_model.py     tick flow (M0World subclasses World) + diagnostics
+  project_overview.txt   this file (spec, design, analysis plan, results)
 
-1. CORE QUESTION (THESIS)
---------------------------
-Which oligarchic strategies are profitable -- and under what conditions
-can an oligarch actually ATTAIN and MAINTAIN them -- when capture abroad
-invites backlash, state collapse and asset seizure?
+CONTENTS
+   1. Core question and hypotheses
+   2. Goal and scope
+   3. Theoretical grounding and sources
+   4. Model architecture (agents, relationships, asymmetry, flows,
+      slide-to-code mapping)
+   5. Virtual experiment (design)
+   6. Measures and analysis plan
+   7. Validation strategy
+   8. Preliminary observations (M0 build; NOT results)
+   9. Open questions and decisions
+  10. Code alignment checklist
+  11. Anticipated contributions and write-up plan
+  12. Timeline, risks, fallbacks
+  13. Consolidation log (what changed and why)
+  Appendix: example companies / families
 
-Strategy here is NOT "how much abroad" (a single ambition/footprint dial).
-It is the shape of an oligarch's RELATIONSHIPS: who they make deals with
-(inside vs. outside their own industry), how visible their own footprint
-is in a host country, and how they stand with each host state. Working
-hypotheses (to be tested, not assumed):
-  H1. The oligarchs who stay oligarchs are those who make deals abroad
-      without a visible footprint that "rubs people the wrong way" -- i.e.
-      who keep good standing with host states.
-  H2. The oligarchs who stay oligarchs are those who make deals with
-      partners OUTSIDE their own industry (complementary rather than
-      overlapping interests).
-The aggregate consequence -- runaway consolidation (a few oligarchic
-networks dominating multiple states) versus a competitive, multipolar
-equilibrium -- is the second outcome of interest, and follows from which
-strategies survive.
 
-The explicit alternatives we are arguing against: (i) that consolidation
-is inevitable once cross-border alliances are possible; (ii) that success
-is determined simply by how far abroad an oligarch expands. The model needs
-built-in counterbalancing forces (backlash, collapse, seizure) so that the
-outcome is genuinely conditional on parameters, not baked into the
-mechanism.
+1. CORE QUESTION AND HYPOTHESES
+-------------------------------
 
-"Stays an oligarch" is operationalized as an EXIT RULE (own definition): an
-oligarch exits if its wealth ever falls at least 50% below its own recorded
-peak (Params.exit_drawdown). Without an exit rule the survival claim is
-not measurable.
+1.1 Question [SLIDES 2]
+  Is an oligarch's survival and continued international capture, through
+  backlash and collapse, better predicted by its FORMAL POSITION (civil vs.
+  ruling) or by its RELATIONAL STRATEGY (standing with host states and
+  partnership structure with other oligarchs)? Build a transnational ABM to
+  isolate the two.
 
-2. GOAL / SCOPE
+1.2 Why a model [SLIDES 2]
+  - Winters, Oligarchy (2011): a baseline exists for oligarchic emergence
+    WITHIN a country.
+  - Camba & Epstein (2023): a baseline exists for foreign interaction /
+    intervention BETWEEN countries.
+  - An ABM is needed because oligarchs and countries must both be modeled
+    as heterogeneous and discrete, micro-level tendencies and relationships
+    are essential, and real data are limited.
+
+1.3 Model type [SLIDES 3]
+  Agent-based dynamic network, primarily intellective (Carley 1999): a
+  minimal mechanism for generating and testing hypotheses, not a
+  point-prediction or calibrated model.
+
+1.4 Hypotheses [SLIDES 3]
+  PRIMARY (P): Oligarchic foreign capture and foreign resource
+    mismanagement ("havoc") rise with network embeddedness, with this
+    relationship being similar in strength and function between civil and
+    ruling oligarchs.
+  SECONDARY (S): The chief dynamic change that removes an oligarch from the
+    international stage is asset loss -- not a lack of network ties nor the
+    type of oligarch.
+  Note on labels: comments in the code use legacy labels "H-b" (foreign
+  capture / havoc) and "H-c" (exit / survival). Inferred mapping: H-b = P,
+  H-c = S. [AGREED; code renamed to P/S in C5]
+
+1.5 Built-in counterbalancing forces
+  Backlash, collapse and seizure are built in so that outcomes are
+  conditional on parameters rather than baked into the mechanism.
+
+1.6 What "exits" means (operational)
+  Exit = removal from the international stage, operationalized in Section 6.3
+  as a persistent collapse of ACTIVE capital (offshore excluded). Without an
+  exit rule, hypothesis S is not measurable. [AGREED in direction; exact
+  rule and thresholds PROPOSED -- see 6.3]
+
+
+2. GOAL AND SCOPE
 -----------------
-Target: publishable in an undergraduate research journal.
+Target: publication in an undergraduate research journal.
 
-Framing: a minimal, clearly-explained mechanism and its conditional
-behavior -- NOT a fully realistic, richly-calibrated model. We cannot
-validate against real cross-national capture data (it barely exists in
-usable form), so the paper's value has to come from structural plausibility
-and sensitivity analysis (in the tradition of exploratory SD work like
-World3/Limits to Growth), not point prediction. All numeric parameters are
-currently PLACEHOLDERS tuned for structural plausibility (sane returns per
-tick; collapse neither absent nor constant), not fitted to data.
+Framing: a minimal, clearly explained mechanism and its conditional
+behavior -- NOT a richly calibrated model. Cross-national capture data
+barely exist in usable form, so the paper's value comes from structural
+plausibility, verification, and sensitivity analysis (Carley 1999;
+exploratory SD tradition such as World3), not point prediction. All numeric
+parameters are PLACEHOLDERS tuned for structural plausibility, not fitted.
 
-Primary claim to demonstrate: which relationship-based strategies survive
-is CONDITIONAL on institutional/backlash strength, not inevitable.
--> Primary parameter to sweep: backlash/detection sensitivity (gamma).
+Scope conditions to state in the paper:
+  - Prices are STATIC in v1 (Section 4.6, 9). [AGREED]
+  - Closed oligarch cohort: no new entrants. [AGREED]
+  - Offshore capital is one-way (never reinvested). [IMPLEMENTED]
+  - Exit liquidation destroys the 30% fire-sale discount and sends proceeds offshore to the
+    exiting oligarch; nothing goes to the state, rivals or population (no GDP /
+    wealth-to-population channel). State as a scope condition. [IMPLEMENTED; future work in 9.2]
+  - One merged position stock (illiquid and invested capital). [IMPLEMENTED]
+  - Symmetric goodwill (directed goodwill parked). [IMPLEMENTED]
+  - Oligarch type is FIXED at initialization; no civil-to-ruling
+    transition in v1. [AGREED]
+  - Backlash is driven by capture load PLUS resource scarcity (the immiseration input); there is no
+    wealth-return-to-population channel. [IMPLEMENTED; partial deviation from slide 4 diagram]
 
-Secondary claims, if time allows:
-  - origin-wealth asymmetry between allying oligarchs determines whether
-    deals are genuinely mutual or let big players absorb small ones.
-  - the open question of whether same-industry overlap breeds rivalry or
-    affinity (Params.overlap_sign; switchable, see Section 4).
+Parked (not in v1): adaptive learning (indoctrinate vs. hedge), origin-
+wealth asymmetry sweep, passive-vs-ambitious populations, directed goodwill,
+deals as discrete events, propaganda.
 
-Future add-on (parked; to be returned to if time allows): passive vs.
-ambitious populations -- comparing collapse and seizure outcomes across
-populations that differ in how far abroad they expand.
 
-Stretch goal, if time allows: adaptive oligarchs that learn to choose
-between indoctrination-style investment (propaganda) and more cautious/
-hedged investment, turning the static phase diagram into a strategic one.
+3. THEORETICAL GROUNDING AND SOURCES
+------------------------------------
+Page-level details of all citations must be verified before use.
 
-3. THEORETICAL GROUNDING
---------------------------
-(Entries marked [NEW] were added with M0. Page-level details of all
-citations should be verified before use in the paper.)
+3.1 Framing literature (all on the slides)
+  - Winters, Oligarchy (2011): source of the civil vs. ruling distinction.
+    RULING = direct political power; CIVIL = power through legal/economic
+    institutions (property law, courts, lobbying). Model types map directly.
+    [SLIDES 5]
+  - Tullock (1980) / Hillman & Riley (1989): contest between oligarchs --
+    the inherited framework. [SLIDES 5]
+  - Hellman (1998), "Winners Take All": alternative framework, inter-
+    oligarchic COOPERATION. [SLIDES 5]
+  - Heathershaw, Pitcher & Soares de Oliveira (2023): addresses the same gap
+    descriptively and calls for more research. [SLIDES 5]
+  - Carley (1999), "On Generating Hypotheses Using Computer Simulations":
+    methodological framework for limited-data ABMs. [SLIDES 5]
+  - Camba & Epstein (2023): baseline for foreign interaction. [SLIDES 2]
+  - Sklair (2002): transnational capitalist class; the literature the
+    "domestic typing persists" outcome would push back on. [SLIDES 10 + refs]
+  - "Company-state" concept (East India Companies; United Fruit/Chiquita):
+    sharper term for a civil oligarch exercising quasi-sovereign power
+    abroad.
 
-- Winters, "Oligarchy" (2011) -- definitional anchor. Distinguishes RULING
-  oligarchs (direct political power) from CIVIL oligarchs (power through
-  legal/economic institutions -- property law, courts, lobbying). Our two
-  oligarch types map directly onto this rather than inventing new
-  vocabulary.
+3.2 Mechanism sources
+  - Tullock (1980); Hillman & Riley (1989) (divisible-prize contest, also
+    Hirshleifer 1989): how captured output in each (country, industry) is
+    split. share = x^r / sum(x^r), r = tullock_r = 1.
+  - Hellman, Jones & Kaufmann (2000): state capture is real but BOUNDED.
+    Motivation for kmax = 0.85 (not calibrated to it).
+  - Gordon (1954); Schaefer (1954); Clark (1990): harvest depends on effort
+    and stock, not a resource-specific efficiency trait. M0 uses the
+    exponential-catch form pool * (1 - exp(-q * total_effort)) (Baranov
+    origin; Clark 1990), which adds diminishing returns and prevents all-in
+    corner solutions.
+  - Turchin (2003); Turchin & Nefedov (2009): STRUCTURE of an aggregate
+    stress indicator only; no calibrated coefficients imported.
+  - McFadden (1974); McKelvey & Palfrey (1995): logit choice for capital
+    allocation (logit_lambda).
+  - Salton & McGill (1983): cosine similarity (preference overlap; initial
+    state-oligarch alignment).
+  - Axelrod (1984): MOTIVATION ONLY for goodwill built by repeated joint
+    activity. No formula taken.
+  - Piketty (2014): r > g logic behind capital accumulation.
+  - Post-Soviet 1990s privatization: precedent for collapse as a discrete,
+    uneven reallocation event; origin of the modern use of "oligarch."
+  - Tilly (1985): protection-racket framing of extraction (comparative
+    parallel).
+  - Ostrom (1990): common-pool framing for unclaimed assets after collapse
+    (DEFERRED).
+  - Law (2015): common random numbers.
+  - Methodology: Borgonovo et al. (2022) (ABM sensitivity analysis
+    protocol); Grimm et al. (2005, pattern-oriented modeling; 2010, ODD);
+    Liang & Zeger (1986) (clustered/GEE logistic); Nakagawa & Schielzeth
+    (marginal/conditional R2 for mixed models).
+  - Existing ABMs to differentiate from: OLIGO (Mason & Sengupta) and the
+    Ukrainian oligarchic-economy ABM (arXiv). Neither models cross-border
+    capture and capital flight as linked decisions. [verify; neither is in
+    the slide reference list]
 
-- "Company-state" concept (historically applied to the East India Company,
-  extended to United Fruit/Chiquita in Central America) -- the sharper term
-  for a civil oligarch/corporation exercising quasi-sovereign power abroad.
+3.3 OWN ASSUMPTIONS, NOT FROM ANY PAPER (state in the paper)
+  Logistic collapse hazard; partial-adjustment (persistent) capture stock;
+  capture-rent stream; backlash accumulation/decay; flight and divestment
+  rules; seizure fractions; the exit rule; ALL goodwill initialization
+  formulas, update equations and effect sizes; the civil/ruling asymmetry
+  design; the interpretation of state goodwill; all numeric parameter
+  values. (AR(1) price shocks are also own, but are OFF in v1.)
+  Also own: the abuse threshold/damage form, scarcity weighting in backlash, fire-sale exit liquidation.
 
-- Piketty, "Capital in the Twenty-First Century" -- the r > g engine behind
-  the capital-accumulation stocks.
+3.4 Reference-list hygiene [PROPOSED -- journal-bound]
+  - Slide references omit several works the model relies on: Schaefer
+    1954, Clark 1990, McFadden 1974, McKelvey & Palfrey 1995, Axelrod 1984,
+    Turchin & Nefedov 2009, Tilly 1985, Ostrom 1990, Hirshleifer 1989,
+    OLIGO and the Ukrainian ABM. Add or drop.
+  - Cederman (2003) is listed in the references; its role in the project
+    is not stated on any slide.
+  - Nakagawa & Schielzeth: author name is misspelled ("Scheilzeth") and the
+    year is listed as 2023; verify (believed 2013).
+  - Hillman & Riley: slide 5 says 1989, the reference entry says 1988 and
+    has a malformed DOI and "ReserachGate" typo.
 
-- Turchin's Political Stress Indicator (Secular Cycles; Ages of Discord;
-  Historical Dynamics, 2003) -- borrowed as a STRUCTURAL template only
-  (aggregate pressure computed top-down from a few macro drivers rather
-  than summed from individual-citizen agents), not his calibrated
-  coefficients, which are fitted to a different historical dataset.
-
-- Post-Soviet 1990s privatization -- empirical precedent for collapse as a
-  discrete, uneven reallocation event rather than smooth decay. Also the
-  historical origin of the modern use of "oligarch."
-
-- Charles Tilly, "War Making and State Making as Organized Crime" (1985) --
-  protection-racket framing of extraction, useful comparative parallel for
-  the capture mechanic.
-
-- Tullock (1980) contest success functions (rent-seeking): a contestant's
-  share of a prize is proportional to their investment raised to a
-  "contest intensity" power, divided by the sum across all contestants'
-  investments raised to that same power. Extended to DIVISIBLE prizes by
-  Hillman & Riley (1989) / Hirshleifer (1989). Underlies how captured
-  output in each (country, industry) is split among competing oligarchs
-  (Params.tullock_r, currently r = 1).
-
-- Hellman, Jones & Kaufmann, "Seize the State, Seize the Day" (World Bank,
-  2000) -- empirical grounding for treating state capture as a real,
-  measurable, BOUNDED quantity: even severe real-world capture never
-  approaches 100%. Motivation for capture being a fraction of output with
-  a ceiling strictly below 1 (Params.kmax = 0.85). Not calibrated to it.
-
-- Schaefer (1954) / Gordon (1954), the Gordon-Schaefer fishery model (see
-  also Clark, Mathematical Bioeconomics, 1990) -- harvest depends on the
-  harvester's effort and the resource stock, NOT on a resource-specific
-  "efficiency" trait. M0 uses the EXPONENTIAL-CATCH form of the same idea,
-  pool * (1 - exp(-q * total_effort)) (Baranov 1918 origin; see Clark
-  1990), which equals q * effort * stock at small effort but adds the
-  diminishing returns that prevent all-in corner solutions.  [CHANGED]
-  Gordon's open-access rent-dissipation result is the reason congestion
-  matters here.
-
-- Ostrom, Governing the Commons (1990) -- common-pool framing for
-  Country.unclaimed_assets after a collapse (DEFERRED; not in M0).
-
-- [NEW] McFadden (1974), "Conditional logit analysis of qualitative choice
-  behavior"; McKelvey & Palfrey (1995), Games & Economic Behavior 10:6-38
-  -- logit / noisy choice, used for how oligarchs allocate capital across
-  (country, industry) pairs (Params.logit_lambda).
-
-- [NEW] Salton & McGill (1983), Introduction to Modern Information
-  Retrieval -- cosine similarity, used as the measure of industry-
-  preference overlap between oligarchs and of alignment between an
-  oligarch's preferences and a country's payoff profile (initial goodwill).
-
-- [NEW] Axelrod (1984), The Evolution of Cooperation -- MOTIVATION ONLY for
-  goodwill built by repeated joint activity and eroded by its absence. No
-  formula taken.
-
-- [NEW] Law (2015), Simulation Modeling and Analysis, 5th ed. -- common
-  random numbers: fixed-shape draws from separate streams so comparisons
-  across parameter values see the same shocks.
-
-- Existing ABMs to build on / differentiate from: the OLIGO model (Mason &
-  Sengupta, oligarchs + elections) and the Ukrainian oligarchic-economy ABM
-  (arXiv, firm-network capture). Neither models cross-border capture or
-  capital flight as linked decisions -- that combination is our gap.
-
-- OWN ASSUMPTIONS, NOT FROM ANY PAPER (state this in the paper): the
-  logistic collapse hazard; the partial-adjustment (persistent) capture
-  stock; the capture-rent income stream; backlash accumulation/decay;
-  flight and divestment rules; seizure fractions; AR(1) commodity-price
-  shocks; the exit rule; ALL goodwill initialization formulas, update
-  equations and effect sizes; the interpretation of state goodwill (see
-  Section 5); and all numeric parameter values.
 
 4. MODEL ARCHITECTURE
-------------------------
-Hybrid ABM/SD: Country and Oligarch are the TWO CORE AGENTS, defined in
-model_core.py and used by every model version. Each agent holds its own
-state (SD-style stocks with accumulation/decay) AND its own behavior
-methods. Relationships are a shared object (Relations) that both agent
-types reference, so the two ends of a relationship always see one value.
+---------------------
 
-Baseline scope: 5 countries x 2 oligarchs per country = 10 oligarchs
-(FIXED, not sampled, so seeds are comparable; the earlier 0-2 random
-sampling made cross-seed variance depend on which countries got
-oligarchs). Scaling beyond this is still to be tested.
+4.1 Scope [SLIDES 6]
+  5 countries x 5 oligarchs per country = 25 oligarchs, FIXED (not sampled),
+  so seeds are comparable. [IMPLEMENTED: 5 per country]
+  Hybrid ABM / SD stocks: Country and Oligarch are the two core agents; each
+  holds its own SD-style stocks and its own behavior methods. Relationships
+  are a shared object (Relations) both agent types reference, so both ends
+  of a relationship see one value. Cross-agent computation is vectorized
+  over stacked views of agent state; agents remain the source of truth.
 
-AGENT 1: Country (the state)
+4.2 AGENT 1: Country (the state)
   Fixed traits:
     baseline_wealth            scales resident oligarchs' starting capital
-    institutional_resilience   makes capture harder for everyone and speeds
-                               backlash decay
-    collapse_threshold         backlash level at which the collapse hazard
-                               reaches half its maximum
-    industry_endowment[i]      comparative advantage (specialist/generalist
-                               split; 2 specialty industries per country).
-                               Governs pool size only, never extraction
-                               efficiency
-    payoff_profile[i]          endowment x price: the "potential payoffs"
-                               that initialize goodwill
-  Stocks / state:
-    backlash_pressure          accumulated popular pressure (see FLOWS)
-    recovery_left              ticks of reduced output after a collapse
-    collapse_count
-    industry_output[i]         this tick's output pool
-    industry_capture[i]        total captured FRACTION of industry i's
-                               output (all oligarchs)
-    domestic_capture           output-weighted captured fraction of the
-                               whole economy
-  Behaviors: produce, update_backlash, hazard, check_collapse
-  DEFERRED (kept on the class, unused in M0): unclaimed_assets,
-    scarcity_pressure, wealth_returned_to_population
+    institutional_resilience   rho in [0.2,1]; harder capture for everyone,
+                               faster backlash decay
+    collapse_threshold         theta; backlash level at which hazard is half
+                               of h_max
+    industry_endowment[i]      specialist/generalist split (2 specialty
+                               industries); governs POOL SIZE only, never
+                               extraction efficiency
+    payoff_profile[i]          endowment x price; "potential payoffs" that
+                               initialize goodwill
+  State:
+    backlash_pressure, recovery_left, collapse_count, industry_output[i],
+    industry_capture[i] (captured FRACTION of industry i, all oligarchs),
+    domestic_capture (output-weighted captured fraction of the economy)
+  Behaviors: produce, full_value, update_resource, update_backlash, hazard, check_collapse
+  Resource state [IMPLEMENTED]: resource_health[i], scarcity_pressure, health_prev, abuse_rate (see 4.9).
+  DEFERRED (on the class, unused): unclaimed_assets, wealth_returned_to_population
 
-AGENT 2: Oligarch
+4.3 AGENT 2: Oligarch
   Fixed traits:
-    oligarch_type              civil or ruling (ruling => home-capture
-                               multiplier; static in M0)
+    oligarch_type              CIVIL or RULING (static in v1)
     home_country
-    industry_preferences[i]    shares summing to 1 (Dirichlet-sampled);
-                               weight allocation choices
-    risk_tolerance             maps to a flight/divest threshold on the
-                               perceived backlash ratio B/theta
-  Stocks / state:
-    capital                    LIQUID wealth, deployable
-    offshore_capital           safe from seizure, earns a small return,
-                               one-way in M0 (flagged simplification)
+    industry_preferences[i]    Dirichlet shares summing to 1
+    risk_tolerance in [0,1]    flight/divest threshold on perceived B/theta:
+                               0.4 + 0.8 * tolerance
+  State:
+    capital                    LIQUID, deployable
+    offshore_capital           safe from seizure; small return; one-way
     positions[c][i]            sunk, seizable stock per (country, industry).
-                               In M0 this MERGES the old
-                               industry_investments and illiquid_assets:
-                               one stock drives BOTH extraction and the
-                               capture contest, and it is what a collapse
-                               seizes
-    capture[c][i]              captured fraction of (c, i) output held by
-                               this oligarch (a persistent stock that decays
-                               without continued investment).
-                               foreign_capture[c] is DERIVED from this, not
-                               independently updated
-    seized_total, initial_wealth, peak_wealth, max_drawdown
-                               (exit bookkeeping)
-  Behaviors: settle (income, costs, insolvency), suffer_collapse,
-    flee_and_divest, net_attractiveness, deploy, record_wealth, exited
-  INITIAL DOMESTIC INFLUENCE: each oligarch starts with a share
-    (Params.init_home_frac) of its capital placed at home, and its capture
-    stock starts at the contest-implied level -- so every oligarch has a
-    nonzero initial domestic capture, as in the original brief.
+                               MERGES industry_investments and illiquid_
+                               assets; drives BOTH extraction and the
+                               capture contest; this is what collapse seizes
+    capture[c][i]              captured fraction of (c,i) output held by this
+                               oligarch; decays without continued investment.
+                               foreign capture is DERIVED from this
+    seized_total               cumulative position value lost to collapse
+                               seizure (the seized-assets covariate of S)
+    initial_wealth, initial_active (capital + positions at t=0), active, exit_tick, below_count,
+                               exit_liq_loss, exit_transfer; cumulative loss accounting seized_total,
+                               cum_home_hit, cum_forced_liq, cum_divest, cum_flight (see 6.3).
+                               Also: check_exit, leave_stage.
+  Behaviors: settle, suffer_collapse, flee_and_divest, net_attractiveness,
+    deploy, record_wealth, exited
+  Initial domestic influence: each oligarch starts with init_home_frac of
+  capital placed at home (by preference x home payoff), and capture starts
+  at the contest-implied level, so every oligarch has nonzero domestic
+  capture.
 
-RELATIONSHIPS: goodwill on EVERY relationship (Relations; SYMMETRIC for now)
-  G[a,b]   oligarch <-> oligarch (O x O; G[a,b] == G[b,a]; zero diagonal)
-  S[o,c]   state <-> oligarch, one value per relationship, INCLUDING the
-           home country (O x C)
-  Both in [-1, 1]. Directed goodwill (A's view of B differs from B's view
-  of A) is PARKED as a later extension.
+4.4 RELATIONSHIPS: goodwill on every relationship (Relations; SYMMETRIC)
+  G[a,b]  oligarch <-> oligarch, O x O, symmetric, zero diagonal, [-1,1]
+          (slide 4: "alliance goodwill arises from inter-oligarchic
+          interaction, both internationally and domestically")
+  S[o,c]  state <-> oligarch, one value per relationship INCLUDING the home
+          country, O x C, [-1,1] (slide 4: "state-oligarch goodwill, per
+          pair")
+  Both revert toward initial attitudes G0, S0.
 
-  Initialization ("industrial interests & potential payoffs"):
-    S0 = home_bonus*home + s_scale*(alignment - mean alignment)
-         - foreign_stigma*foreign,
-         alignment = cosine(oligarch preferences, country payoff_profile)
-    G0 = overlap_sign * init_overlap_coef * (cosine(pref_a, pref_b) - mean)
-         + same_country_bonus * co_resident
-    overlap_sign = -1: same-industry overlap breeds RIVALRY;
-                   +1: it breeds AFFINITY. This is the open question from
-    the old Alliance TODO; it is a switch, used in BOTH initialization and
-    dynamics.
-  Dynamics:
-    G: reverts toward G0; rises with COMPLEMENTARY co-presence (same
-       country, different industries); moves by overlap_sign with
-       same-pool overlap; symmetric stochastic shocks
-    S: reverts toward S0; rises with visible investment; falls with the
-       captured share of output; a foreigner gains from "vouching" by
-       liked local oligarchs (halo); stochastic shocks
+  Initialization (own formulas):
+    S0 = home_bonus*home + s_scale*(align - mean(align))
+         - foreign_stigma*foreign
+         align = cosine(oligarch preferences, country payoff_profile)
+    G0 = overlap_sign*init_overlap_coef*(cosine(pref_a,pref_b) - mean)
+         + same_country_bonus*co_resident ; symmetrized, clipped
+    overlap_sign: -1 = same-industry overlap breeds RIVALRY ("collusion"
+    is +1 = AFFINITY). Slide 6 calls these -1 (rivalry) / +1 (collusion).
+    It enters BOTH initialization and dynamics.
+
+  Dynamics (as implemented; 5 shared parameters: gw_decay, lam_oo, lam_inv,
+  lam_cap, sigma_gw):
+    f = position shares; Fc = f summed over industries (country shares)
+    copresence = Fc Fc^T ; ovl = same (country, industry) overlap ;
+    joint = copresence - ovl (same country, different industry)
+    dG = gw_decay*(G0 - G) + lam_oo*joint + overlap_sign*lam_oo*ovl
+         + sigma_gw*eps_oo                      (symmetric shocks)
+    dS = gw_decay*(S0 - S) + lam_inv*tanh(positions_oc/a_ref)
+         - lam_cap*(captured share of output) + sigma_gw*eps_os
+    The earlier "halo" (vouching by liked locals) and separate per-matrix
+    decay/lambda parameters were DROPPED to trim parameters; halo is a
+    future extension, not part of v1.
+
   Effects:
-    - capture effectiveness x (1 + zeta_cap*S)
-    - capture effectiveness x (1 + eta * sum_b G_ab * presence_bc)
+    - capture effectiveness x clip(1 + zeta_cap*S, 0.2, inf)
+    - capture effectiveness x clip(1 + eta*sum_b G_ab*presence_bc, 0.3, 2)
       (signed: rival presence hurts, partner presence helps)
-    - backlash contribution of an oligarch's capture x (1 - zeta_bl*S),
-      times a foreignness visibility factor
-    - seizure loss on collapse x (1 - zeta_seize*max(S,0))
-    - deployment attractiveness: + goodwill_pull*(S + tanh(partner presence))
+    - backlash weight of an oligarch's capture x clip(1 - zeta_bl*S, 0.1,
+      inf) x foreignness factor (1 + foreign_backlash_mult)
+    - seizure on collapse x (1 - zeta_seize*max(S,0))
+    - deployment attractiveness + goodwill_pull*(S + tanh(partner presence))
 
-PARAMETERS (heterogeneous traits sampled once at init; global constants in
-Params in model_core.py)
-  Extraction:  q (catchability), yield_scale, price_bar[i] (compressed to
-               1.0-2.5 so specialization is not swamped by price),
-               op_cost
-  Capture:     kmax, kappa, capture_adj, capture_rent, tullock_r,
-               ruling_home_mult. There is NO separate foreign-capture
-               penalty: home advantage flows through goodwill (home S0 is
-               high) plus the ruling multiplier
-  Backlash:    gamma (PRIMARY SWEEP), b_decay, foreign_backlash_mult,
-               shock_sd
-  Collapse:    h_max, h_width, seize_frac, foreign_exposed,
-               resident_liquid_hit, recovery_ticks, recovery_output
-  Prices:      price_ar, price_sd
-  Goodwill:    see RELATIONSHIPS above (home_bonus, s_scale,
-               foreign_stigma, init_overlap_coef, same_country_bonus,
-               overlap_sign, gw_decay_*, lam_*, halo, sigma_gw_*,
-               zeta_*, eta, goodwill_pull)
-  Behavior:    deploy_frac, logit_lambda, perc_sd, flight_gain/max,
-               divest_gain/max, fire_sale_loss, offshore_return,
-               exit_drawdown
+  Interpretation of S [OPEN, confirm]: S is the POLITY'S standing toward the
+  oligarch (legitimacy), not the regime's favor. That is why higher S
+  reduces seizure and backlash. If S means regime favor, those effects
+  would flip or need rethinking.
 
-FLOWS IMPLEMENTED IN M0 (m0_model.py, one tick, in order)
-  1. prices: log price deviations follow an AR(1) process (shared across
-     countries); Country.produce -> output pool = endowment * yield_scale *
-     price, halved during recovery
-  2. extraction: pool * (1 - exp(-q * total position)) split by Tullock
-     share -> each oligarch's extraction revenue
-  3. capture contest: aggregate capture in (c, i) saturates toward kmax as
-     effective effort rises; split among oligarchs by Tullock share;
-     each oligarch's capture stock partially adjusts toward its target
-     (and decays without investment). Capture pays a separate CAPTURE RENT:
-     capture_rent * captured share * output  [load-bearing assumption --
-     see Section 5]
-  4. settle: income, running costs, offshore return; insolvent oligarchs
-     liquidate positions at a fire-sale loss
-  5. backlash: Country.update_backlash from the capture LOAD (output-
-     weighted capture, weighted by foreignness and (1 - zeta_bl*S)),
-     decaying faster with institutional_resilience, plus an exogenous shock
-  6. collapse: probabilistic hazard = h_max * logistic((B - threshold) /
-     h_width). On collapse: backlash reset, recovery begins, positions
-     there are seized (foreign holdings too if foreign_exposed), reduced by
-     the polity's goodwill toward each oligarch; resident oligarchs also
-     lose part of their liquid capital
-  6b. goodwill updates (see RELATIONSHIPS)
-  7. perception and protection: noisy perceived backlash -> capital flight
-     (liquid -> offshore) and divestment of positions above the oligarch's
-     risk threshold
-  8. deployment: each oligarch allocates a share of liquid capital by a
-     logit over ALL (country, industry) pairs with positive risk-adjusted
-     marginal return (marginal extraction + marginal capture rent -
-     running cost - expected seizure loss + relationship pull), weighted by
-     industry preference
-  9. record: wealth history; drawdown drives the exit rule
+4.5 CIVIL / RULING ASYMMETRY (own design; reuses ruling_home_mult)
+  This is the "formal position" side of the question. It is built so that
+  type matters through two offsetting channels:
+    RULING (at own home only), via ruling_home_mult = 1.5 [SLIDES 6]:
+      (a) capture effectiveness x1.5 at home (cheaper domestic capture);
+      (b) backlash weight x1.5 for capture at home (state control is more
+          visible/attributable);
+      (c) seizure fraction x1.5 (clipped to 1) if their OWN home country
+          collapses (entangled with the fallen regime); also enters
+          expected-seizure in deployment.
+    CIVIL (everywhere), via civil_cost_mult = 1.3 [SLIDES 6]:
+      running cost on ALL positions (domestic AND foreign) is x1.3 (legal
+      defense, lobbying, intermediaries); enters settle() and deployment
+      net attractiveness.
+  Slide 9 stylized fact, delivered by (c): after a nation falls, local
+  ruling oligarchs should lose more assets than local civil oligarchs.
 
-STOCHASTICITY (all from separate RNG streams, fixed-shape draws each tick =>
-common random numbers): AR(1) price shocks; exogenous backlash shocks;
-noisy risk perception; probabilistic collapse; goodwill shocks (symmetric
-for G). Noise is deliberately NOT applied to accounting identities.
+  IMPORTANT consequence for hypothesis P: civil_cost_mult is NOT home-only.
+  It raises the hurdle for civil deployment abroad, so type differences in
+  FOREIGN outcomes are expected to appear through the model's own
+  assumptions (see Section 8.2: foreign capture rate per unit foreign
+  capital was higher for civil, Cohen's d = 1.09). Hypothesis P ("similar
+  between types") therefore cannot be read off a bare null; it needs the
+  type-blind control (5.2) and an equivalence-style test (6.4).
+  The model_core.py / m0_model.py docstrings that say foreign-only rates
+  "should show no meaningful difference" are inconsistent with this and
+  were corrected in C5. [DONE]
 
-FLOWS DEFERRED (from the earlier version; not in M0)
-  - resource stock, regeneration, abuse threshold, scarcity channel
-    (old flows #9-10, #13; with the M0 calibration the abuse threshold is
-    reachable again, since extraction fraction 1-exp(-qX) hits 0.5 at
-    X = ln2/q ~ 2.3)
-  - composite immiseration channel with wealth_returned_to_population (#11)
-  - the illiquid vs. liquid split, unclaimed_assets and asset repurposing
-    (#15-16), beyond the merged position stock
-  - seizure of power / ruling_status transitions (#14)
-  - deals as discrete events, pooled joint capital, defection (#5-6)
-  - displacement grievance as an explicit flow (#8; PARTLY covered in M0 by
-    the same-pool overlap term in goodwill dynamics)
-  - propaganda, directed goodwill, passive-vs-ambitious populations
+4.6 FLOW OF ONE TICK: slide 4 -> code mapping [SLIDES 4]
+  STATUS (C5): rows tagged CODE-TODO below were implemented in Batches A-C: price_dynamics flag
+  (step 1); resource depletion/abuse and scarcity (step 2b; scarcity feeds backlash in step 5);
+  abuse-based havoc (5b); exit check after recording (step 9; rule in 6.3); per-tick RunLog (step 9).
+  The m0_model.py header holds the current tick order.
+  Slide 4 tick step                  Code (m0_model.py step) / status
+  ---------------------------------  ----------------------------------------
+  1 Prices update, industries        Step 1. Country.produce: output pool =
+    output                           endowment x yield_scale x price (x
+                                     recovery_output during recovery).
+                                     PRICES STATIC in v1: price = price_bar.
+                                     [AGREED; code currently runs AR(1) with
+                                     price_sd = 0.10 -> CODE-TODO: add
+                                     price_dynamics flag, default OFF;
+                                     slide bullet to read "industries
+                                     output"]
+  2 Revenue from output pool is      Step 2. Pool extracted = G(1 - exp(-q X)),
+    split                            X = total position; split by Tullock
+                                     share (position^r). Step 3 adds the
+                                     separate CAPTURE RENT stream:
+                                     capture_rent x captured share x output
+                                     (capture_rent = 0.5 [SLIDES 6]).
+  3 Capture share updates            Step 3. Contest target K x Tullock share
+                                     of effective effort (K = kmax(1-
+                                     exp(-kappa X_eff))); stock adjusts
+                                     partially (capture_adj) toward target.
+  4 Each oligarch handles finances   Step 4. Oligarch.settle: income, running
+                                     costs (civil x civil_cost_mult),
+                                     offshore return; insolvent oligarchs
+                                     liquidate positions at fire_sale_loss.
+  5 Per-nation backlash updates      Step 5. Country.update_backlash: B =
+                                     max(0, (1-decay)B + gamma*load +
+                                     shock_sd*eps); decay = b_decay x (1 +
+                                     rho). load = capture weighted by
+                                     foreignness, (1 - zeta_bl*S), and
+                                     ruling_home_mult at home for ruling.
+                                     gamma = "backlash sensitivity"
+                                     [SLIDES 6].
+  6 Collapse / asset seizure checks  Step 6. Hazard = h_max x logistic((B -
+                                     theta)/h_width). On collapse: B reset to
+                                     0, recovery_ticks of reduced output,
+                                     seizure of positions there (foreign
+                                     holdings too, if foreign_exposed),
+                                     goodwill-dampened and ruling-amplified
+                                     at home; residents lose
+                                     resident_liquid_hit of liquid capital.
+                                     Step 6b: goodwill updates (G, S) --
+                                     not a separate slide step.
+  7 Oligarchs perceive risk          Step 7. Noisy perceived backlash ->
+                                     B/theta ratio -> capital flight (liquid
+                                     -> offshore) and divestment above the
+                                     oligarch's risk threshold.
+  8 Oligarchs decide what to do      Step 8. Logit over ALL (country,
+    with current assets/revenue      industry) pairs with positive
+                                     risk-adjusted marginal return
+                                     (marginal extraction + marginal capture
+                                     rent - running cost - expected seizure
+                                     + goodwill pull), weights = log
+                                     preferences; deploys deploy_frac x
+                                     capital.
+  9 Details logged                   Step 9. record_wealth (current). Full
+                                     per-tick long-format logging is a
+                                     [CODE-TODO] (Section 10).
 
-INITIALIZATION RULE
-  Oligarch starting capital = home country baseline_wealth x U(0.5, 1.5) x
-  capital_scale; type is ruling with probability ruling_prob (placeholder).
-  baseline_wealth is decoupled from industry output values (noted side
-  effect of endowment no longer playing triple duty). init_home_frac of
-  capital is placed at home in proportion to preferences x home payoff
-  profile. Initial goodwill per the formulas above. Backlash, recovery and
-  capture (beyond the initial contest-implied level) start at 0.
+  Slide 4 diagram nodes -> code:
+    Oligarch capital (liquid & illiquid) -> capital + positions (merged)
+    Offshore capital ("Flight")          -> offshore_capital
+    Returns (+) loop                     -> extraction + capture rent -> capital
+    Domestic / Foreign capture (per nation) -> capture[c][i]; home vs foreign
+    Alliance goodwill                    -> Relations.G
+    State-oligarch goodwill (per pair)   -> Relations.S
+    Investment preferences & availabilities -> industry_preferences (log
+                                     weights); "availabilities" read as pool
+                                     size / capture room via marginal returns
+                                     [PROPOSED reading]
+    Backlash pressure (per nation); "low & middle class immiseration"
+                                     -> Country.backlash_pressure fed by
+                                     capture load. No explicit immiseration /
+                                     wealth-return channel in v1 (deviation).
+    Collapse event, "Reset"              -> check_collapse; B reset + recovery
+    "New oligarchs, wealth moves, etc."  -> NOT in code (closed cohort). [OPEN,
+                                     Section 9]
+    Exit                                 -> exit rule (Section 6.3)
 
-5. OPEN QUESTIONS / DECISIONS STILL NEEDED
----------------------------------------------
-RESOLVED BY M0 (revisit if results are sensitive):
-  - Collapse form: a probabilistic hazard on backlash pressure
-    (h_width -> 0 recovers a hard threshold). h_width is a sweepable
-    parameter, so hard-vs-soft is testable rather than assumed.
-  - Does collapse seize foreign holdings? M0: yes, controlled by
-    Params.foreign_exposed (default True) -- this materially affects
-    results and must be defended/swept.
-  - Endowment/stock/value coupling: endowment sets pool size only; prices
-    compressed; capture is a fraction of output (removes the earlier
-    units mismatch between industry values and oligarch capital).
-  - Relationship between industry investment and capture: one merged
-    position stock feeds both extraction and the Tullock capture contest;
-    capture is a saturating fraction (kmax = 0.85 kept); tullock_r = 1.
-  - Where randomness enters: see STOCHASTICITY above.
-  - Whether capture should boost extraction: M0 sidesteps it with a
-    SEPARATE capture-rent stream (capture_rent). The catchability-boost
-    version remains open.
+4.7 STOCHASTICITY
+  Separate RNG streams with fixed-shape draws each tick (common random
+  numbers; Law 2015): price shocks (unused when static), backlash shocks,
+  noisy risk perception, probabilistic collapse, goodwill shocks (symmetric
+  for G). Noise is not applied to accounting identities. Replication r uses
+  the same seed across conditions (paired comparisons).
 
-STILL OPEN / NEW:
-  - LOAD-BEARING ASSUMPTION: the capture-rent stream anchors oligarchs at
-    home. Earlier (ambition-based) tests showed that removing it made
-    all-in foreign expansion profitable. It needs its own justification
-    and a sensitivity sweep before any strategy claim is made.
-  - Meaning of STATE goodwill: M0 treats it as the POLITY'S standing toward
-    the oligarch (legitimacy), which is why higher S reduces seizure and
-    backlash. If it is meant to be REGIME favor, several effects need
-    reconsidering. To be confirmed.
-  - Deals: currently cooperation is emergent (goodwill + presence), not an
-    explicit event. H1/H2 are testable properly only with discrete deals
-    (pooled commitments per pair x country x industry) and defection.
-    Still open: purely passive goodwill decay vs. an active "betrayal"
-    event.
-  - Same-industry overlap: rivalry or affinity (overlap_sign)? Early M0
-    runs show only a marginal effect on exit rates; needs more work.
-  - Survival measure: current partner-goodwill diagnostic averages over all
-    oligarchs, including ones in unrelated countries; a measure restricted
-    to partners present in shared countries is needed. Diagnostics are
-    also endogenous (losing positions erodes goodwill), so causal
-    language should be avoided until deals are explicit.
-  - Symmetric vs. directed goodwill (parked).
-  - Ruling status: static type in M0. Whether becoming ruling changes the
-    rules going forward (cheaper domestic capture, higher backlash
-    sensitivity) remains a dead end.
-  - Offshore_capital is one-way in the baseline (never reinvested) --
-    acceptable v1 simplification, flag it explicitly.
-  - Scale: how many countries/oligarchs before ABM becomes the
-    computational bottleneck; and whether results survive scaling from 10
-    to 20-30 oligarchs (5-10 agents is thin for an "ABM").
-  - Calibration: every parameter is a placeholder. Priority sensitivity
-    sweeps: zeta_cap, zeta_bl, zeta_seize, eta, halo, lam_cap,
-    capture_rent, seize_frac, h_width, exit_drawdown, plus gamma.
-  - A single domestic "policy capture" stock per country vs. bilateral
-    trade/diplomatic mechanics: out of scope, future work.
-  - Deferred-mechanic questions carried over (relevant only if those
-    mechanics return): what fraction of investment hardens into illiquid
-    assets; whether ASSET_CLAIM_RATE should differ from catchability;
-    whether scarcity_pressure is per-industry or aggregate; whether
-    CATCHABILITY and price vary by oligarch; how immiseration's two
-    components combine; the abuse-threshold and regeneration values.
+4.8 PARAMETERS
+  Fixed by slides [SLIDES 6]: capture_rent = 0.5; civil_cost_mult = 1.3;
+    ruling_home_mult = 1.5; 5 oligarchs/country; 5 countries.
+  Swept [SLIDES 6]: gamma in {0.04, 0.08, 0.12, 0.16}; overlap_sign in
+    {-1, +1}.
+  Everything else in Params (model_core.py) is a PLACEHOLDER: extraction
+    (q, yield_scale, price_bar, op_cost), capture (kmax, kappa, capture_adj,
+    tullock_r), backlash (b_decay, foreign_backlash_mult, shock_sd),
+    collapse (h_max, h_width, seize_frac, foreign_exposed,
+    resident_liquid_hit, recovery_ticks, recovery_output), goodwill (init
+    and dynamics above, zeta_cap, zeta_bl, zeta_seize, eta, goodwill_pull),
+    behavior (deploy_frac, logit_lambda, perc_sd, flight_*, divest_*,
+    fire_sale_loss, offshore_return), and structure (n_ticks, ruling_frac,
+    capital_scale, init_home_frac, a_ref).
+  Exit parameters: exit_floor_frac = 0.25, exit_window = 10 (placeholders; exit_drawdown removed). [IMPLEMENTED]
+  foreign_exposed (default True: collapse seizes foreign holdings) is
+  load-bearing and must be defended/swept.
 
-6. NEXT STEPS
----------------
-1. (DONE) M0: agents defined in model_core.py; M0 flows in m0_model.py;
-   first diagnostics. Preliminary observations (placeholder parameters,
-   descriptive only; see m0_notes.md): higher backlash sensitivity raises
-   collapse frequency and exit rates as expected; survivors hold higher
-   state goodwill abroad; foreign footprint size does not predict
-   survival; no protective effect of oligarch-oligarch goodwill YET (the
-   measure and the mechanism are both crude). None of this is a result.
+4.9 FLOWS DEFERRED (not in v1)
+  Composite immiseration channel with wealth_returned_to_population (only the scarcity input to backlash
+  exists); illiquid vs. liquid split, unclaimed_assets and asset repurposing; ruling_status transitions;
+  deals as discrete events; displacement grievance as an explicit flow; propaganda; directed goodwill;
+  exit-liquidation channels to rivals / population (9.2); country-specific h_star tied to resilience.
+  RESTORED in v1 (no longer deferred) [IMPLEMENTED]: resource stock s per (country, industry).
+    output = endowment x yield x price x s x recovery; h = 1 - exp(-qX); abuse = abuse_coef*max(0, h - h_star);
+    s <- clip(s + s_regen*max(s, s_floor)*(1-s) - s_dep*h*s - abuse*s, 0, 1). Collapse does NOT heal the stock.
+    scarcity = value-weighted mean(1 - s); backlash: B += gamma*(load + w_scar*scarcity).
+    abuse_coef is a global deterministic scalar (NOT sampled per oligarch): havoc must be emergent, not a trait.
+    Heterogeneity would instead come from a country-specific h_star tied to resilience (parked).
 
-2. Make deals explicit (M1 core): pooled commitments per (pair, country,
-   industry), goodwill-modulated effectiveness, defection/betrayal. This
-   is what turns H1/H2 into testable strategy claims.
+4.10 INITIALIZATION
+  Starting capital = home baseline_wealth x U(0.5,1.5) x capital_scale. Type: EXACT split
+  floor(0.5 x 25) = 12 ruling / 13 civil, random placement, fixed at init [AGREED; replaces ruling_prob = 0.3].
+  init_home_frac of capital placed at home. Initial goodwill per 4.4. Backlash and recovery start at 0;
+  resource_health starts at 1; capture starts at the contest-implied level. initial_active = capital +
+  positions at t=0. Closed cohort (no new entrants) [AGREED].
 
-3. Better survival analysis: partner-relevant goodwill measures
-   (partners present in shared countries); footprint visibility measures;
-   an explicit test of "deals with partners outside my industry."
 
-4. Robustness/sensitivity sweeps (list in Section 5), starting with the
-   capture-rent assumption, foreign-asset exposure and h_width; then the
-   PRIMARY sweep of gamma across many seeds looking for the qualitative
-   flip between strategies that survive and strategies that do not.
+5. VIRTUAL EXPERIMENT [SLIDES 6]
+--------------------------------
+5.1 Main design
+  Variable                              # values   Values
+  Backlash sensitivity (gamma)              4      0.04, 0.08, 0.12, 0.16
+  Overlap sign                              2      -1 (rivalry), +1 (collusion)
+  Capture rent share                        1      0.5
+  Civil transaction-cost multiplier         1      1.3
+  Ruling home-entanglement multiplier       1      1.5
+  Oligarchs per country                     1      5
+  Countries                                 1      5
+  Replications per condition                1      100
+  Design replications: 4 x 2 x 100 = 800 runs; 25 oligarchs per run =
+  20,000 oligarch-run records.
+  [IMPLEMENTED: run_design.py; seed = base_seed + rep in every condition (common random numbers).]
 
-5. Scaling check (10 -> 20-30 oligarchs) and paired common-random-number
-   comparisons across parameter values.
+5.2 Type-blind control block [AGREED]
+  Re-run with civil_cost_mult = ruling_home_mult = 1.0. With no built-in type
+  asymmetry, any type effect found by the pipeline is an artifact; this is
+  the null calibration for hypothesis P and for the type terms in S.
+  Crossing/size of the control block: [OPEN; default full 4 x 2 x 100, reducible via
+  run_design --reps-typeblind].
 
-6. Reintroduce deferred mechanics (depletion/scarcity, illiquid vs.
-   liquid, asset repurposing, ruling transitions) ONLY as ablations: does
-   each change M0's conclusions?
+5.3 Run length [OPEN]
+  Current n_ticks = 100. Choose n_ticks and a burn-in so runs contain enough
+  collapse and exit events (slide 11 fallback: ticks can be varied). Pilot
+  decides.
 
-7. If time allows: origin-wealth asymmetry sweep; directed goodwill;
-   passive-vs-ambitious populations; adaptive learning (indoctrinate vs.
-   hedge).
+5.4 Static-price check [AGREED]
+  In a pilot, measure (a) variance over time in marginal returns across
+  (country, industry) pairs and (b) how often oligarchs shift allocation
+  targets. If allocations stay dynamic, static prices are sufficient. If
+  they freeze, add a DETERMINISTIC supply-responsive price rule with a fixed,
+  unswept elasticity (not exogenous random shocks: shared price shocks
+  create correlated booms/busts among co-located, embedded oligarchs and
+  could spuriously inflate the embeddedness effect under test).
 
-8. Write up: lead with the definitional grounding (Winters' civil/ruling
-   split), state the gap relative to OLIGO/Ukrainian-ABM literature
-   explicitly, present the strategy-survival result as the core finding,
-   state which components are own assumptions, and list Section 5's
-   unresolved items as limitations/future work rather than silently
-   omitting them.
 
-Example companies/families to consider:
-- Anglo-Iranian Oil Company (Iran)
-- Chiquita (Latin American all over, from Russia (?))
+5.5 Calibration [AGREED approach; values PROVISIONAL]
+  Placeholders are tuned for ECONOMIC PLAUSIBILITY ONLY (pilot.TARGETS). They are NEVER tuned toward P or
+  S outcomes (circular): the E->capture and E->havoc correlations are reported, not targeted.
+  Why: the original placeholders destroyed the economy (scale mismatch: total pool value ~14.6/tick vs
+  ~163 starting capital; s_dep outran regeneration). Fixed by parameter calibration, no structural change.
+  Targets (per gamma level): median wealth growth 1.0-3.0; exit fraction 0.05-0.60 (0.10-0.40 at gamma
+  0.08 and 0.12); foreign share of positions 0.25-0.65; share of active oligarch-ticks with foreign
+  presence 0.60-1.0; E sd >= 0.015; offshore share <= 0.35; abuse_frac 0.05-0.50; mean health 0.40-0.90;
+  oligarchs active at outcome-window start 12-25 of 25; collapses per country per run 0.2-1.2 / 0.5-2.0 /
+  1.0-3.5 / 1.5-5.0 (gamma .04/.08/.12/.16); collapses and exit non-decreasing in gamma.
+  Provisional values (random search, 3 seeds, overlap_sign = -1, main block only): yield_scale 1.689,
+  q 0.108, op_cost 0.04, s_dep 0.065, abuse_coef 0.385, h_star 0.607, w_scar 0.514, s_regen 0.111,
+  flight_gain 0.329, b_decay 0.159.
+  Result by gamma (.04/.08/.12/.16): median growth 1.38/1.18/1.24/1.28; exit .15/.21/.25/.27;
+  collapses per country .53/1.13/2.6/4.33.
+  Emergent pattern (mention in paper): abuse and depletion are WORSE at low gamma (collapses seize
+  positions and relieve extraction).
+  Windows: burn-in first 20% of ticks, embedding 20-50%, outcome 50-100% (pilot.windows).
+  Pending: validation on >= 10 seeds, both overlap signs, type-blind block; exit-tick distribution
+  (no exits before tick 50 in calibration runs); static-price check (5.4).
+
+6. MEASURES AND ANALYSIS PLAN [SLIDES 7-8]
+------------------------------------------
+Unit of analysis: oligarch within run (country as a nested grouping).
+Everything below is computed from per-tick logs (Section 10, item 4).
+
+6.1 Network embeddedness E_i [AGREED; implemented in World.embeddedness]
+  Per tick, from end-of-tick positions and current G. Presence p_ic = tanh(position_ic / a_ref).
+    E_foreign_i = sum_j G_ij * ( sum over countries c FOREIGN to i of p_ic * p_jc ) / (O-1)    <- PRIMARY
+  Partners of ANY home count (locals included). Robustness: E_all (all countries); E_pos / E_neg (the
+  positive / negative-G parts; E_foreign = E_pos + E_neg). Denominator fixed at O-1. Exited agents hold
+  no positions (p = 0), so they drop out of everyone's E automatically.
+  E = 0 conflates "no ties" with exactly offsetting ties: CONTROL FOR FOREIGN PRESENCE in the analysis.
+  Lag: E is measured over the EMBEDDING window (20-50% of ticks), outcomes over the OUTCOME window
+  (50-100%), so E is not mechanically contained in the outcome. Mask with `active`; E = 0 for inactive agents.
+  State goodwill (S_home, S_foreign_mean, S_foreign_pw) is logged and used as covariate / robustness.
+
+6.2 Dependent variables for P
+  - FOREIGN CAPTURE RATE [AGREED]: per-tick foreign share = foreign / (foreign + domestic capture gained),
+    capture gained = extraction + capture rent. DV = MEAN over the outcome window; MEDIAN = robustness.
+    Robustness alternative: foreign-only rate per unit average foreign capital (the share is diluted by
+    ruling_home_mult's domestic inflation; the rate is not). The slide-8 mock y-axis (~5-20) is not on a
+    share scale; regenerate the real figure with the chosen scale.
+  - HAVOC [AGREED; RESOLVED: abuse-based]: the oligarch's Tullock effort share of the pool abuse damage
+    (abuse x prior health x full-stock value V), split into foreign_havoc / domestic_havoc; same mean /
+    median and share / rate treatments as capture. abuse = abuse_coef*max(0, h - h_star), h = 1 - exp(-qX).
+    abuse_coef is a global scalar, so havoc is emergent, not a trait. The old backlash-load contribution
+    survives only as a diagnostic (foreign_load, domestic_load).
+
+6.3 Exit and asset loss for S
+  - EXIT [AGREED]: ACTIVE capital (liquid + positions; OFFSHORE EXCLUDED) below exit_floor_frac (0.25) x
+    INITIAL active capital for exit_window (10) consecutive ticks. Absorbing; exit_tick recorded.
+    Floor and window are placeholders: confirm against the exit-tick distribution before fixing windows.
+  - ON EXIT [IMPLEMENTED]: positions are LIQUIDATED at fire_sale_loss (30%); proceeds + liquid capital go
+    offshore (exit_transfer; not flight); the discount is destroyed (exit_liq_loss); active = False; the
+    agent skips all behavior, including offshore return (exited agents' offshore stops earning). Goodwill
+    rows of exited agents keep drifting but have no effect (presence 0). RECORD: this replaces the earlier
+    exit write-off. Proceeds are NOT redistributed to the state, rivals or population (scope condition).
+  - LOSS ACCOUNTING (value DESTROYED; flight is a transfer): (1) collapse seizure; (2) resident liquid hit
+    at home collapse; (3) forced (insolvency) liquidation loss; (4) voluntary divestment loss.
+    S headline covariate = (1)+(2) over initial active capital; (3) = robustness; (4) EXCLUDED as circular.
+    cum_debt_forgiven was REMOVED: the limited-liability clamp is original M0 behavior, untracked, and never
+    binds at current parameters (the earlier "406 events" were float dust).
+  - Anti-tautology: exit is wealth-based, so S is partly mechanical. Nested models start from initial
+    active capital (plus gamma, overlap) and test whether the seized fraction adds beyond it.
+
+6.4 Statistics  [analysis plan: commit BEFORE looking at real run output]
+  P (capture and havoc, separately): linear mixed models, random intercepts for run and country-within-run,
+    covariates E, type, overlap_sign, initial wealth and foreign presence. E x type similarity is judged by
+    an equivalence test (TOST); margin ~20-25% of the pooled slope, with 10% and 30% as sensitivity, FIXED
+    BEFORE real runs. E^2 x type tests curvature; per-type slope positivity is reported. The type-blind
+    block (5.2) is the null calibration: E x type slopes must be equal when both multipliers = 1.0.
+    Report who drops out by type (survivorship) and partial-window robustness.
+  Disclosure: E -> capture is partly BUILT IN via eta (partner presence in the capture multiplier). P is
+    therefore the net strength of that channel against backlash, seizure and depletion, plus type
+    similarity. Run an eta = 0 ablation (expected to collapse the E -> capture slope).
+  S: PERSON-PERIOD clustered logit (cluster on run; Liang & Zeger 1986), covariates lagged 1 tick. Nested:
+    M0 (initial active capital, gamma, overlap) -> + seized fraction -> + E -> + type. Report odds ratios,
+    delta-AUC / BIC, marginal R2 (Nakagawa & Schielzeth), drop-one-from-full. With ~20,000 rows p-values
+    are uninformative: lead with effect sizes.
+  Never tune toward P or S outcomes (5.5). Sandbox lacks statsmodels / pyarrow: models run locally.
+  OFAT sensitivity (Section 7): slide-9 constants capture_rent, civil_cost_mult, ruling_home_mult,
+    zeta_seize, PLUS eta, h_star, abuse_coef, w_scar.
+
+6.5 Figures [SLIDES 7-8]
+  1. Interaction plot (grouped scatterplot with fits): embeddedness and
+     oligarch type on foreign capture / havoc. Slide 8 shows ILLUSTRATIVE
+     MOCK DATA only; regenerate from real runs.
+  2. Forest plot (odds ratios) of oligarch exit.
+  3. Exit probability vs. asset loss across backlash sensitivity.
+
+
+7. VALIDATION STRATEGY [SLIDES 9]
+---------------------------------
+Statistics:
+  - Manipulation check for backlash sensitivity (gamma should raise
+    collapse frequency) and overlap sign (should change the sign of
+    same-industry contribution to G and hence of E).
+  - One-factor-at-a-time sensitivity analysis across the key unverifiable
+    constants named on slide 9: capture_rent, civil_cost_mult,
+    ruling_home_mult, zeta_seize (Borgonovo et al. 2022). Broader sweeps
+    (zeta_cap, zeta_bl, eta, lam_cap, seize_frac, h_width, foreign_exposed)
+    are robustness extras if time allows.
+  - Edge-case checks [PROPOSED list]: capture_rent = 0; the type-blind
+    setting (multipliers = 1); foreign_exposed = False; extreme gamma; very
+    short and very long runs; all-civil and all-ruling populations.
+Stylized facts (automated assertions on logs where possible):
+  1. Backlash builds and national "resets" occur in discrete episodes.
+  2. Marginal extraction declines as total position rises (per nation, per
+     industry). (Implemented by the exponential-catch pool.)
+  3. After a nation falls, over following ticks, local ruling oligarchs see
+     worse asset losses than local civil oligarchs. (Implemented by 4.5c.)
+  4. Goodwill remains plausible throughout and nonzero across actors.
+Data (plausibility checks only, not calibration):
+  - Worldwide Governance Indicators (directionality of "Corruption" and
+    "Rule of Law").
+  - World Bank resource natural rents as % of GDP (possible extension).
+  - Specific oligarchic case studies (Appendix list).
+Engineering checks [PROPOSED]: determinism by seed; no NaN or negative
+capital/positions; capture in [0, kmax]; Tullock shares sum to at most 1; G
+symmetric with zero diagonal and in [-1,1]; S in [-1,1]. (Wealth is NOT a
+closed accounting identity because extraction income is created each tick.)
+
+
+8. PRELIMINARY OBSERVATIONS (M0 BUILD; NOT RESULTS)
+---------------------------------------------------
+STALE-DATA WARNING: everything in this section comes from the M0 build
+BEFORE slide alignment (10 oligarchs, AR(1) prices ON, drawdown-based exit,
+placeholder parameters, 30-150 seeds, 100 ticks). It is retained as
+development history and as a sanity check on mechanisms. It must be
+regenerated under the Section 5 design before anything is cited.
+
+8.1 Mechanism sanity checks (descriptive, placeholder parameters)
+  - Baseline: about 0.8 collapses per country per run, exit about 18%,
+    final-wealth Gini about 0.39, mean state goodwill about 0.65 (home) and
+    0.15 (foreign).
+  - Backlash sensitivity gamma 0.04 -> 0.16: collapses per country rose from
+    0.17 to 3.6; exit rate rose from about 9% to about 30%, levelling off
+    above 0.12. Direction matches the manipulation check.
+  - Survivors vs. exited (within-seed, 121 seeds; features are
+    ENDOGENOUS, so descriptive only): state goodwill abroad +0.093 +/-
+    0.022; foreign share of positions +0.024 +/- 0.026 (no relationship);
+    average goodwill with other oligarchs -0.035 +/- 0.014 (opposite of a
+    protective-cooperation story; the measure averaged over all oligarchs,
+    including ones in unrelated countries, so it is a poor test).
+  - Overlap sign (+1 vs. -1, 150 paired seeds): exit rate change -0.023 +/-
+    0.012, marginal.
+  - Causality caveat: oligarchs who lose positions also lose the presence
+    that supports goodwill, so goodwill can follow survival rather than
+    cause it. Hence the lag structure in 6.1.
+
+8.2 Civil/ruling verification (60 seeds, after the asymmetry was added)
+  Measure                              Civil    Ruling   Expected to differ?
+  exited                               0.331    0.240    Yes (cost vs. exposure)
+  foreign_capture_gained (absolute)    52.5     108.6    Yes (ruling's extra
+                                                          home-side wealth)
+  foreign_capture_share                0.352    0.435    Yes (home effects
+                                                          dilute differently)
+  foreign_capture_rate (time-          12.6     10.7     Originally expected
+    integrated, foreign-only)                              NO; found civil
+                                                          higher, d = 1.09
+  The rate gap is real, not a measurement artifact (a first version using
+  the final-tick position as denominator WAS an artifact; the time-
+  integrated average fixed it). Mechanism: civil_cost_mult raises the net-
+  return hurdle for civil deployment everywhere, producing smaller, more
+  selective foreign portfolios with higher measured per-unit return
+  ("quality over quantity abroad"). It is a plausible emergent effect, not
+  a bug -- but it means the model as built produces type differences in
+  foreign capture by construction. Implication for P: see 4.5, 5.2, 6.4.
+  Sanity: no negative capital/position states or NaNs across 60 seeds x 10
+  oligarchs.
+
+
+9. OPEN QUESTIONS AND DECISIONS
+-------------------------------
+9.1 RESOLVED
+  - Prices static in v1; AR(1) hook kept behind a flag. [AGREED]
+  - Type fixed at init; no ruling transition in v1. [AGREED]
+  - Type-blind control block added. [AGREED]
+  - Foreign capture DV = mean/median per-tick foreign share. [AGREED]
+  - Exit counts persistent loss of ACTIVE capital, not loss of foreign
+    positions only. [AGREED in direction]
+  - Collapse: probabilistic hazard on backlash (h_width -> 0 recovers a hard
+    threshold; h_width is sweepable).
+  - Merged position stock feeds both extraction and the Tullock contest;
+    capture saturates at kmax = 0.85; tullock_r = 1.
+  - Capture does not boost extraction: M0 uses a SEPARATE capture-rent
+    stream instead.
+  - Collapse seizes foreign holdings (foreign_exposed = True) -- must be
+    defended / swept.
+
+9.1b RESOLVED IN BATCHES A-C
+  - Havoc = abuse-based (6.2). E definition, local partners counted, foreign-presence control (6.1).
+  - Exit rule, absorbing, exited agents stop acting; fire-sale liquidation; loss categories (6.3).
+  - "Asset loss" for S = (1)+(2); (3) robustness; (4) excluded (6.3).
+  - Type split exactly 12/13; closed cohort; depletion/abuse restored (4.9, 4.10).
+  - S model = person-period hazard with initial-active-capital control (6.4).
+
+9.2 STILL OPEN
+  - n_ticks, windows and exit placeholders: confirm from the exit-tick distribution (5.5).
+  - Type-blind block size (default full grid).
+  - Meaning of state goodwill: polity standing vs. regime favor (4.4).
+  - Load-bearing assumptions to defend / sweep: capture_rent anchor; foreign_exposed = True.
+  - Goodwill measures are endogenous; avoid causal partnership language.
+  - Scale: whether results survive beyond 25 oligarchs; runtime of 800+ runs.
+  - Static-price check (5.4): result pending.
+  - FUTURE EXTENSIONS (state as scope condition in the paper): exit liquidation currently destroys the 30%
+    discount and sends proceeds offshore to the exiting oligarch; nothing goes to the state, rivals or
+    population. Possible: the discount accrues to rival oligarchs (survivor gains; exit/strength feedback)
+    and/or flows to the population (the deferred immiseration channel).
+
+
+10. CODE ALIGNMENT CHECKLIST  (status after Batches A-C + C5)
+-----------------------------------------------------------
+ [x]  1 5 per country; exact 12/13 type split (ruling_frac)
+ [x]  2 static prices behind price_dynamics (default False; stream still drawn)
+ [x]  3 exit rule: persistent active capital + fire-sale liquidation (floor 0.25, window 10)
+ [x]  4 per-tick logging (runlog.py; one .npz per run; to_frames())
+ [x]  5 per-tick embeddedness (World.embeddedness) + windows (pilot.windows)
+ [ ]  6 DV computation from logs (Batch E1)
+ [x]  7 design runner (run_design.py; CRN seeds; manifest; type-blind block)
+ [ ]  8 analysis scripts: mixed models, clustered logit, marginal R2, TOST, figures (Batch E)
+ [x]  9 H-b / H-c renamed to P / S
+ [x] 10 docstrings corrected (type claim)
+ [x] 11 m0_notes.md references replaced
+ [x] 12 stale "halo" references removed
+ [ ] 13 tests (Batch D1)
+ [~] 14 pilot: calibration provisional (3 seeds); validation C(a)-(c) and static-price check pending
+ [ ] 15 README, requirements, ODD
+ Added: [x] depletion/abuse + scarcity->backlash; [x] abuse-based havoc; [x] loss accounting;
+        [ ] eta = 0 ablation (D3); [ ] OFAT harness (E4)
+
+
+11. ANTICIPATED CONTRIBUTIONS AND WRITE-UP PLAN [SLIDES 10]
+-----------------------------------------------------------
+Anticipated:
+  - First generative model to address the gap between international policy
+    and oligarchic interaction.
+  - If network embeddedness predicts foreign capture / havoc similarly for
+    civil and ruling oligarchs, that is a structural challenge to the
+    implicit assumption that formal political position is the main axis of
+    elite international power.
+  - If asset seizure is what removes an oligarch from the international
+    stage, that is a tangible claim about the overarching mechanism of
+    oligarchic durability beyond case studies alone.
+Else:
+  - If oligarchic type matters more than network position, as the
+    literature thus far assumes, that pushes back on recent transnational-
+    capitalist-class work and suggests domestic typing persists in
+    international dealings.
+Write-up [PROPOSED]: lead with Winters' civil/ruling split and the slide-2
+gap; state the gap relative to Heathershaw et al., OLIGO and the Ukrainian
+ABM; present P and S with effect sizes and the type-blind control; list
+own assumptions (3.3) and open items (9.2) as limitations rather than
+omitting them.
+
+
+12. TIMELINE, RISKS, FALLBACKS [SLIDES 11]
+------------------------------------------
+  Weeks 1-2 (Oct 11-24): finalize code, run design, ensure basic
+    functionality and validity.
+  Week 3 (Oct 25-31): sensitivity analysis, manipulation check, edge-case
+    check, two regressions.
+  Weeks 4-5 (Nov 1-14): write-up and finalize figures.
+  Week 6 (Nov 15-21): final revisions.
+  Fallbacks [SLIDES 11]: if short on time, run simpler trend tests and report
+    simplified effect sizes; if extensions are too costly, focus on the key
+    question and specific hypotheses; the number of ticks can be varied if
+    more exit/reset events are needed.
+  Suggested protection of the timeline [PROPOSED]: do not start any parked
+  item (Section 2) before the Section 10 checklist is finished.
+
+
+13. CONSOLIDATION LOG
+---------------------
+13.1 Merge
+  m0_notes.md was folded into this file: file roles -> Sections 0/4; v2
+  goodwill specification -> 4.4 (updated to the trimmed 5-parameter code
+  equations); civil/ruling asymmetry (notes Sec. 6) -> 4.5 and 8.2;
+  results snapshot -> Section 8 (marked stale); sources -> Section 3;
+  next steps -> Sections 9-10.
+13.2 Departures from the slides (and why)
+  - Prices static in v1 (slide 4 says prices update). Reason: avoid
+    correlated shocks confounding embeddedness; opportunities already vary
+    through pool size, capture saturation, backlash and collapse.
+  - Added a type-blind control block, lagged embeddedness, an exit
+    definition, equivalence testing, and nested-model baselines (all tagged
+    AGREED/PROPOSED above).
+  - Immiseration channel and new-oligarch entry from the slide 4 diagram
+    are not in v1 code (4.6).
+13.3 Retired framings (previous project_overview.txt)
+  - Core question about consolidation vs. multipolar equilibrium;
+    "strategies are profitable / attainable / maintainable" framing and the
+    H1/H2 hypotheses (footprint visibility, partners outside own industry);
+    the alternative claims "consolidation is inevitable" and "success is
+    determined by how far abroad an oligarch expands"; primary sweep framed
+    as a phase transition; Alliance objects and Alliance.goodwill (replaced
+    by Relations.G); 0-2 sampled oligarchs per country; the old exit
+    definition (50% drawdown from peak); the scaling-to-30 note as a
+    deliverable; the "adaptive learning" and "origin-wealth asymmetry"
+    secondary claims (now parked).
+13.4 Corrections found while merging
+  - Old text described a "halo" and per-matrix goodwill parameters that the
+    code no longer has.
+  - Code docstrings claim type should not affect foreign-only rates, but
+    civil_cost_mult applies abroad (4.5, 8.2).
+  - Both code headers point to m0_notes.md, which no longer exists.
+  - Code comments use H-b/H-c labels not used on the slides.
+
+
+13.5 Spec sync after Batches A-C (C5)
+  - Depletion/abuse restored (4.9); havoc is abuse-based (6.2); E definition (6.1); loss categories and
+    exit liquidation (6.3); S = person-period clustered logit with initial-active-capital control (6.4);
+    closed cohort and 12/13 type split (4.10); eta circularity disclosure + eta = 0 ablation, equivalence
+    margin, OFAT additions (6.4); new Section 5.5 Calibration; Section 10 checklist updated.
+  - Record: exit write-off replaced by fire-sale liquidation (6.3, 9.1); exited agents' offshore stops
+    earning; goodwill rows drift harmlessly; the debt clamp is original limited liability and never binds.
+  - Section 8 REMAINS stale (pre-alignment M0 results); regenerate before citing.
+
+
+APPENDIX: EXAMPLE COMPANIES / FAMILIES TO CONSIDER
+--------------------------------------------------
+- Anglo-Iranian (Anglo-Persian) Oil Company (Iran)
+- Chiquita / United Fruit (Latin America)
 - International Telephone & Telegraph (Chile)
-- Union Miniére du Haut-Katanga (DRC)
-- Dole plc (Hoduras & Hawaii)
-- Dulles Family (USA)
-- Guggenheim & Rockefeller Families (USA)
+- Union Miniere du Haut-Katanga (DRC)
+- Dole plc (Honduras & Hawaii)
+- Dulles family (USA)
+- Guggenheim & Rockefeller families (USA)
 - Dutch East India Company
 - British East India Company
