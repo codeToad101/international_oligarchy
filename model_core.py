@@ -15,7 +15,7 @@ TWO CORE AGENTS (every model version, M0 and beyond, uses these classes):
                             (probabilistically).
 
   Oligarch                  owns: type, home country, industry preferences,
-                            risk tolerance, liquid capital, offshore capital,
+                            divestment propensity, liquid capital, offshore capital,
                             positions and capture stock in every country.
                             does: earns, settles insolvency, flees/divests
                             under perceived risk, chooses deployment, absorbs
@@ -47,24 +47,16 @@ RESEARCH FRAMING (see project_overview.txt):
   baseline level of domestic capture so there is something for foreign
   behavior to depart from. It is held constant, never swept.
 
-  UPDATE (civil/ruling asymmetry, own design, not from any paper): the type
-  distinction is deliberately asymmetric, built entirely by REUSING
-  ruling_home_mult for three home-entanglement effects plus one new
-  parameter (civil_cost_mult) for civil's offsetting cost:
-    RULING, at home only: cheaper/more effective capture (existing),
-      MORE backlash contribution (visible, attributable to direct state
-      control), and MORE seizure exposure if their OWN home country
-      collapses (entangled with the fallen regime).
-    CIVIL, everywhere: pays civil_cost_mult x higher running costs on all
-      captured positions (legal defense, lobbying, intermediaries), but
-      gets relative protection at home on collapse BY COMPARISON to
-      ruling (civil_cost_mult does not appear in the collapse-exposure
-      term at all -- civil's home protection is implicit, not a separate
-      dial), reflecting that popular anger deflects to intermediaries and
-      the regime itself rather than to civil oligarchs directly.
-  NOTE: civil_cost_mult applies ABROAD, so foreign capture/havoc LEVELS differ by type by
-  construction. The valid test of P (similar E-slope across types) is E x type slope
-  equality in the type-blind block (project_overview.txt 5.2, 6.4).
+  UPDATE (civil/ruling asymmetry, own design, not from any paper; revised C6): CIVIL is the NEUTRAL
+  baseline. The type distinction is built ONLY by ruling_home_mult, reused for three home-entanglement
+  effects of RULING oligarchs at their own home: capture effectiveness (cheaper, more effective capture),
+  backlash vulnerability (visible, attributable to direct state control) and seizure exposure if their
+  home country collapses (entangled with the fallen regime). Abroad, both types follow identical rules.
+  civil_cost_mult (default 1.0; the slides' 1.3 is kept as an OFAT arm, run_design block "civil13") is an
+  optional extra running-cost multiple on civil positions (legal defense, lobbying, intermediaries). At 1.3
+  it makes foreign LEVELS differ by type by construction, which is why it left the main design.
+  Valid check of P: E x type slope equality in the type-blind block (project_overview.txt 5.2, 6.4). With
+  type-symmetric foreign rules, similar slopes show that home-side type effects do not distort the E-slope.
 
 SOURCES (details/verification caveats in project_overview.txt Section 3):
   Gordon (1954); Schaefer (1954); Clark (1990)  -- extraction, logistic regen
@@ -142,7 +134,8 @@ class Params:
     ruling_home_mult: float = 1.5       # REUSED for 3 ruling home-entanglement effects: capture
                                          # effectiveness (existing), backlash vulnerability, and
                                          # collapse exposure at home (both new)
-    civil_cost_mult: float = 1.3        # civil oligarchs pay this multiple on running
+    civil_cost_mult: float = 1.0 # [C6] default 1.0 (civil = neutral baseline); slides' 1.3 = OFAT arm.
+                                         # Civil oligarchs pay this multiple on running
                                          # costs (legal defense/lobbying/intermediaries), domestic+foreign
 
     # --- backlash [structure only: Turchin03] ---
@@ -201,7 +194,7 @@ class Params:
     offshore_return: float = 0.02
 
     # --- exit [B2] ---
-    exit_floor_frac: float = 0.25       # exit when ACTIVE capital (liquid + positions, offshore EXCLUDED) is below
+    exit_floor_frac: float = 0.40       # exit when ACTIVE capital (liquid + positions, offshore EXCLUDED) is below
                                          # this fraction of INITIAL active capital ...
     exit_window: int = 10               # ... for this many consecutive ticks. Placeholders (pilot, C4).
                                          # (Replaces the old drawdown-from-peak rule; exit_drawdown removed.)
@@ -413,7 +406,8 @@ class Oligarch:
     Fixed traits
       oligarch_id, idx, home_country (country idx)
       oligarch_type            CIVIL or RULING (ruling => home capture multiplier)
-      risk_tolerance in [0,1]  maps to flight/divest threshold on B/theta: 0.4 + 0.8*tol
+      divestment_propensity in [0,1]  higher = earlier flight/divestment: threshold on B/theta =
+                               0.4 + 0.8*(1 - propensity)  [C6: renamed from risk_tolerance]
       industry_preferences (NI,) shares summing to 1; weight allocation choices
     Stocks / state
       capital                  liquid, deployable
@@ -443,7 +437,7 @@ class Oligarch:
     oligarch_id: str
     home_country: int
     oligarch_type: str
-    risk_tolerance: float
+    divestment_propensity: float
     industry_preferences: np.ndarray
     capital: float
     n_countries: int
@@ -485,7 +479,7 @@ class Oligarch:
 
     @property
     def flight_threshold(self) -> float:
-        return 0.4 + 0.8 * self.risk_tolerance
+        return 0.4 + 0.8 * (1.0 - self.divestment_propensity)
 
     @property
     def pref_log(self) -> np.ndarray:
@@ -681,7 +675,7 @@ class World:
         ruling = np.zeros(O, dtype=bool)
         ruling[r.choice(O, size=n_ruling, replace=False)] = True
         capital = baseline[home] * r.uniform(0.5, 1.5, O) * p.capital_scale
-        tol = r.uniform(0.0, 1.0, O)
+        tol = r.uniform(0.0, 1.0, O)   # [C6] draw unchanged (same RNG stream); stored as propensity = 1 - tol
         pref = r.dirichlet(np.full(NI, p.pref_alpha), O)
 
         home_mask = np.zeros((O, C), dtype=bool)
@@ -700,7 +694,7 @@ class World:
         for o in range(O):
             ol = Oligarch(idx=o, oligarch_id=f"oligarch_{o}", home_country=int(home[o]),
                           oligarch_type=OligarchType.RULING if ruling[o] else OligarchType.CIVIL,
-                          risk_tolerance=float(tol[o]), industry_preferences=pref[o].copy(),
+                          divestment_propensity=float(1.0 - tol[o]), industry_preferences=pref[o].copy(),
                           capital=float(capital[o]), n_countries=C, relations=self.relations)
             self.oligarchs.append(ol)
             self.countries[home[o]].resident_oligarch_ids.append(ol.oligarch_id)

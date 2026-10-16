@@ -7,7 +7,7 @@ see project_overview.txt Sections 2 and 5.5). Windows scale with n_ticks:
 (100 ticks -> burn-in 0-20, embed 20-50, outcome 50-100). The same windows feed the analysis tables.
 
 USAGE
-    python pilot.py --report            # target table over the 4 slide-6 gamma levels
+    python pilot.py --report            # target table over 5 gamma levels (0.04, 0.20 = edges)
     python pilot.py --price-check       # static-price adequacy check (5.4)
 """
 from __future__ import annotations
@@ -22,7 +22,8 @@ from model_core import NI, Params
 from m0_model import M0World
 from runlog import RunLog
 
-GAMMAS = (0.04, 0.08, 0.12, 0.16)
+GAMMAS = (0.04, 0.08, 0.12, 0.16, 0.20)   # [C6] slide grid + 0.20 high edge
+EDGES = (0.04, 0.20)                        # edge tests: reported as end-case behavior, NOT in the P/S suite
 
 
 def windows(T: int) -> Tuple[Tuple[int, int], Tuple[int, int]]:
@@ -128,10 +129,23 @@ MID_EXIT = (0.10, 0.40)                  # exit prevalence target for gamma in {
 COLLAPSES = {0.04: (0.2, 1.2), 0.08: (0.5, 2.0), 0.12: (1.0, 3.5), 0.16: (1.5, 5.0)}   # per country per run
 
 
+# [C6] EDGE levels carry only "economy not destroyed" targets; their collapse/exit frequencies are the
+# manipulated quantity (rules fixed before any gamma = 0.20 output was seen).
+EDGE_TARGETS = {
+    "growth_med":     (1.0, 1e9),
+    "exit_frac":      (0.0, 0.60),
+    "active_outcome": (12.0, 25.0),
+    "offshore_share": (0.0, 0.35),
+    "health":         (0.40, 1.0),
+}
+
+
 def check(table: Dict[float, Dict[str, float]]) -> Tuple[float, List[str]]:
-    """Return (penalty, messages). Penalty = summed relative distance outside target ranges, plus trend
-    violations (collapses and exit must be non-decreasing in gamma)."""
+    """Return (penalty, messages). Penalty = summed relative distance outside target ranges.
+    INTERIOR gammas (not in EDGES): full TARGETS (+ MID_EXIT at 0.08/0.12) and COLLAPSES ranges.
+    EDGE gammas: EDGE_TARGETS only. Trend: collapses_pc and exit_frac non-decreasing in gamma, ALL levels."""
     pen, msgs = 0.0, []
+
     def out_of(v, lo, hi):
         if np.isnan(v):
             return 10.0
@@ -140,21 +154,28 @@ def check(table: Dict[float, Dict[str, float]]) -> Tuple[float, List[str]]:
         if v > hi:
             return (v - hi) / max(abs(hi), 1e-6)
         return 0.0
+
     for g, row in table.items():
-        for k, (lo, hi) in TARGETS.items():
+        edge = g in EDGES
+        for k, (lo, hi) in (EDGE_TARGETS if edge else TARGETS).items():
             d = out_of(row[k], lo, hi)
-            if k == "exit_frac" and g in (0.08, 0.12):
-                d = max(d, out_of(row[k], *MID_EXIT))
+            if (not edge) and k == "exit_frac" and g in (0.08, 0.12):
+                lo, hi = MID_EXIT
+                d = out_of(row[k], lo, hi)
             if d > 0:
-                pen += d; msgs.append(f"gamma={g}: {k}={row[k]:.3f} outside {(lo, hi)}")
-        d = out_of(row["collapses_pc"], *COLLAPSES[g])
-        if d > 0:
-            pen += d; msgs.append(f"gamma={g}: collapses_pc={row['collapses_pc']:.2f} outside {COLLAPSES[g]}")
+                pen += d
+                msgs.append(f"gamma={g}{' (edge)' if edge else ''}: {k}={row[k]:.3f} outside {(lo, hi)}")
+        if (not edge) and g in COLLAPSES:
+            d = out_of(row["collapses_pc"], *COLLAPSES[g])
+            if d > 0:
+                pen += d
+                msgs.append(f"gamma={g}: collapses_pc={row['collapses_pc']:.2f} outside {COLLAPSES[g]}")
     gs = sorted(table)
     for k in ("collapses_pc", "exit_frac"):
         for a, b in zip(gs[:-1], gs[1:]):
             if table[b][k] < table[a][k] - 1e-9:
-                pen += 1.0; msgs.append(f"trend: {k} falls from gamma={a} to {b}")
+                pen += 1.0
+                msgs.append(f"trend: {k} falls from gamma={a} to {b}")
     return pen, msgs
 
 

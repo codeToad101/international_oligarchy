@@ -3,8 +3,8 @@ run_design.py -- [C3] the virtual experiment of slide 6.
 
 DESIGN
   main block:       gamma in {0.04, 0.08, 0.12, 0.16}  x  overlap_sign in {-1 (rivalry), +1 (collusion)}
-                    x  100 replications  = 800 runs; everything else at Params defaults
-                    (capture_rent 0.5, civil_cost_mult 1.3, ruling_home_mult 1.5, 5 oligarchs x 5 countries).
+                    x  100 replications  = 800 runs at the slide grid (C6: 5 gamma levels incl. edges 0.04/0.20 = 1000 per block); everything else at Params defaults
+                    (capture_rent 0.5, civil_cost_mult 1.0 [C6; 1.3 = block civil13], ruling_home_mult 1.5, 5 oligarchs x 5 countries).
   typeblind block:  identical grid with civil_cost_mult = ruling_home_mult = 1.0 (type-blind null
                     calibration; project_overview.txt 5.2). Size is [OPEN]; default = full grid,
                     reduce with --reps-typeblind.
@@ -38,13 +38,14 @@ import numpy as np
 
 from model_core import Params
 from m0_model import M0World
-from pilot import windows
+from pilot import windows, EDGES
 
-GAMMAS = (0.04, 0.08, 0.12, 0.16)
+GAMMAS = (0.04, 0.08, 0.12, 0.16, 0.20)   # [C6] 0.04 and 0.20 are EDGES (pilot.EDGES)
 OVERLAPS = (-1.0, 1.0)
 REPS = 100
 BASE_SEED = 1000
-BLOCKS = {"main": {}, "typeblind": dict(civil_cost_mult=1.0, ruling_home_mult=1.0)}
+BLOCKS = {"main": {}, "typeblind": dict(civil_cost_mult=1.0, ruling_home_mult=1.0),
+          "civil13": dict(civil_cost_mult=1.3)}      # [C6] OFAT arm: the slides' civil cost multiplier
 
 
 def make_params(base: Params, block: str, gamma: float, overlap: float) -> Params:
@@ -94,11 +95,11 @@ def run_one(job: dict) -> dict:
     w = M0World(p, job["seed"])
     rl = w.run()
     (e0, e1), (o0, o1) = windows(p.n_ticks)
-    meta = dict(run_id=job["run_id"], block=job["block"], gamma=job["gamma"], overlap_sign=job["overlap_sign"],
+    meta = dict(edge=bool(job["gamma"] in EDGES), run_id=job["run_id"], block=job["block"], gamma=job["gamma"], overlap_sign=job["overlap_sign"],
                 rep=job["rep"], seed=job["seed"], config_hash=job["config_hash"], git_commit=job["git_commit"],
                 windows=dict(burn_in=e0, embed=[e0, e1], outcome=[o0, o1]), params=asdict(p))
     rl.save(job["path"], meta=meta)
-    return dict(run_id=job["run_id"], block=job["block"], gamma=job["gamma"], overlap_sign=job["overlap_sign"],
+    return dict(edge=int(job["gamma"] in EDGES), run_id=job["run_id"], block=job["block"], gamma=job["gamma"], overlap_sign=job["overlap_sign"],
                 rep=job["rep"], seed=job["seed"], config_hash=job["config_hash"], git_commit=job["git_commit"],
                 n_ticks=p.n_ticks, path=job["path"], runtime_s=round(time.time() - t0, 3),
                 exit_frac=float(w.exited_array().mean()),
@@ -120,7 +121,8 @@ def main():
     ap.add_argument("--out", default="out")
     ap.add_argument("--reps", type=int, default=REPS)
     ap.add_argument("--reps-typeblind", type=int, default=None, help="default: same as --reps")
-    ap.add_argument("--blocks", default="main,typeblind")
+    ap.add_argument("--blocks", default="main,typeblind", help="also available: civil13 (OFAT arm)")
+    ap.add_argument("--gammas", default=",".join(str(g) for g in GAMMAS))
     ap.add_argument("--workers", type=int, default=os.cpu_count() or 1)
     ap.add_argument("--base-seed", type=int, default=BASE_SEED)
     ap.add_argument("--set", nargs="*", default=[], help="override Params fields, e.g. n_ticks=150")
@@ -130,8 +132,8 @@ def main():
 
     base = replace(Params(), **_parse_sets(a.set))
     blocks = [b for b in a.blocks.split(",") if b]
-    reps = {"main": a.reps, "typeblind": a.reps if a.reps_typeblind is None else a.reps_typeblind}
-    jobs = make_jobs(base, a.out, blocks, reps, a.base_seed)
+    reps = {b: (a.reps_typeblind if (b == "typeblind" and a.reps_typeblind is not None) else a.reps) for b in BLOCKS}
+    jobs = make_jobs(base, a.out, blocks, reps, a.base_seed, gammas=tuple(float(x) for x in a.gammas.split(',')))
     print(f"{len(jobs)} runs: " + ", ".join(f"{b}={sum(j['block'] == b for j in jobs)}" for b in blocks)
           + f"  | commit={jobs[0]['git_commit'] if jobs else 'n/a'}")
     if a.dry_run:

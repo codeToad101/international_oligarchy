@@ -78,7 +78,7 @@ class RunLog:
         self.static = dict(
             ruling=np.array([o.is_ruling for o in Os]),
             home=np.array([o.home_country for o in Os]),
-            risk_tolerance=np.array([o.risk_tolerance for o in Os], dtype=np.float32),
+            divestment_propensity=np.array([o.divestment_propensity for o in Os], dtype=np.float32),
             initial_wealth=np.array([o.initial_wealth for o in Os], dtype=np.float32),
             initial_active=np.array([o.initial_active for o in Os], dtype=np.float32),
             exit_tick=np.array([np.nan if o.exit_tick is None else o.exit_tick for o in Os], dtype=np.float32),

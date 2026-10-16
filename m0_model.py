@@ -31,7 +31,7 @@ TICK ORDER  (slide 4 -> code mapping is in project_overview.txt 4.6)
    THEN exit check (floor-and-window on ACTIVE capital; exited agents leave the stage)
 
 There is no strategy dial. Differences between oligarchs come from their
-preferences, risk tolerance, type, home country and RELATIONSHIPS; outcomes
+preferences, divestment propensity, type, home country and RELATIONSHIPS; outcomes
 (who stays an oligarch) are emergent.
 
 STOCHASTICITY: AR(1) prices (only if price_dynamics), backlash shocks, noisy

@@ -1,24 +1,28 @@
 """
-validate_c.py -- [C(a)-(c)] calibration validation. Run from the folder with the model files.
+validate_c.py -- calibration validation + sanity checks (needs pilot.EDGES and 5-level GAMMAS from patch_c6).
 
-  python validate_c.py --seeds 10                         # everything (16 x seeds runs), resumable
-  python validate_c.py --seeds 10 --blocks main --overlaps -1     # chunk it
-  python validate_c.py --report                           # tables only, from validate_rows.csv
-  python validate_c.py --price-check                      # static-price adequacy (5.4)
-  python validate_c.py --time 1                           # time 1 run, project 1600-run cost
+  python validate_c.py --seeds 20 --workers 4                      # blocks x overlaps x 5 gammas, resumable, then report
+  python validate_c.py --seeds 20 --workers 4 --seed0 5000 --csv heldout.csv   # [D] HELD-OUT seeds (seed = seed0 + rep)
+  python validate_c.py --report [--csv FILE]                       # tables only
+  python validate_c.py --typetest [--csv FILE]                     # [D] civil-vs-ruling exit permutation test
+  python validate_c.py --compare OLD.csv NEW.csv                   # rename/patch-neutrality check
+  python validate_c.py --time 1 | --price-check
+  options: --blocks main,typeblind,civil13  --overlaps -1,1  --gammas 0.04,...  --set civil_cost_mult=1.3
 
-Per-run rows are appended to validate_rows.csv (skips finished runs, so you can stop/restart).
-Seeds = 1000 + rep, same as run_design.py (common random numbers).
-The E->capture / E->havoc numbers are REPORTED, never targets. Slopes below are pooled and unadjusted
-(no run/country effects): a quick diagnostic only, NOT the P test (that is Batch E).
+Default seed0 = run_design.BASE_SEED (1000), i.e. the production seeds. Use a different --seed0 AND a different
+--csv for held-out checks. Gammas in pilot.EDGES are EDGES ('*'): 'economy not destroyed' targets only, and
+excluded from the exit-count, slope and type-test lines (those describe the interior suite).
+E->capture / E->havoc numbers are REPORTED, never targets. Pooled slopes are unadjusted diagnostics, not the P test.
 """
 import argparse, csv, os, time, warnings
+from dataclasses import replace
 from multiprocessing import Pool
 import numpy as np
 
 from model_core import Params
 from m0_model import M0World
 import pilot
+from pilot import EDGES
 from run_design import make_params, GAMMAS, BASE_SEED, _parse_sets
 
 warnings.simplefilter("ignore", RuntimeWarning)
@@ -29,10 +33,10 @@ DVS = ("cap", "hav")
 
 
 def one(args):
-    base, block, g, s, r = args
+    base, block, g, s, r, seed0 = args
     p = make_params(base, block, g, s)
     t0 = time.time()
-    rl = M0World(p, BASE_SEED + r).run()
+    rl = M0World(p, seed0 + r).run()
     rt = time.time() - t0
     row = pilot.summarize(rl, p)
     (e0, e1), (o0, o1) = pilot.windows(rl.T)
@@ -55,7 +59,7 @@ def one(args):
     ex = ~np.isnan(et)
     row.update(n_exit=float(ex.sum()), n_exit_civil=float(ex[~ruling].sum()), n_exit_ruling=float(ex[ruling].sum()),
                n_ruling=float(ruling.sum()), exit_ticks=" ".join(str(int(x)) for x in et[ex]),
-               block=block, gamma=g, overlap=s, rep=r, runtime=rt, T=float(rl.T))
+               block=block, gamma=g, overlap=s, rep=r, seed=float(seed0 + r), runtime=rt, T=float(rl.T))
     return row
 
 
@@ -76,24 +80,27 @@ def append(rows):
         w.writerows(rows)
 
 
-def run_all(base, blocks, overlaps, seeds, workers):
+def run_all(base, blocks, overlaps, gammas, seeds, workers, seed0):
     have = done_keys()
-    jobs = [(base, b, g, s, r) for b in blocks for s in overlaps for g in GAMMAS for r in range(seeds)
+    jobs = [(base, b, g, s, r, seed0) for b in blocks for s in overlaps for g in gammas for r in range(seeds)
             if (b, g, s, r) not in have]
-    print(f"{len(jobs)} runs to do ({len(have)} already in {CSV})")
+    print(f"{len(jobs)} runs to do ({len(have)} already in {CSV}); seeds {seed0}..{seed0 + seeds - 1}")
+    if not jobs:
+        return
     t0, buf = time.time(), []
     it = (Pool(workers).imap_unordered(one, jobs) if workers > 1 else map(one, jobs))
     for k, row in enumerate(it, 1):
         buf.append(row)
-        if len(buf) >= 10 or k == len(jobs):
-            append(buf); buf = []
+        if len(buf) >= 20 or k == len(jobs):
+            append(buf)
+            buf = []
             print(f"  {k}/{len(jobs)}  {time.time() - t0:.0f}s", flush=True)
 
 
 # ------------------------------------------------------------------ report
-def load():
+def load(path=None):
     rows = []
-    with open(CSV) as f:
+    with open(path or CSV) as f:
         for d in csv.DictReader(f):
             rows.append({k: (v if k in TEXT else float(v)) for k, v in d.items()})
     return rows
@@ -109,71 +116,117 @@ def slope(rows, k, ty):
     return (n * sxy - sx * sy) / den if n > 5 and den > 1e-12 else np.nan
 
 
-def report(base):
+def report():
     rows = load()
     COLS = ["growth_med", "exit_frac", "exit_frac_civil", "exit_frac_ruling", "collapses_pc", "fshare",
-            "with_foreign", "E_sd", "E_neg_frac", "E_pos_frac", "offshore_share", "abuse_frac", "health",
-            "scarcity", "active_outcome", "corr_E_capshare", "corr_E_havoc", "runtime"]
+            "with_foreign", "E_sd", "E_neg_frac", "offshore_share", "abuse_frac", "health",
+            "scarcity", "active_outcome", "corr_E_capshare", "corr_E_havoc"]
     T = int(rows[0]["T"])
     (e0, e1), (o0, o1) = pilot.windows(T)
     for blk in sorted({r["block"] for r in rows}):
         for ov in sorted({r["overlap"] for r in rows if r["block"] == blk}):
             sub = [r for r in rows if r["block"] == blk and r["overlap"] == ov]
-            nseed = len({r["rep"] for r in sub})
-            print(f"\n=== block={blk}  overlap_sign={ov:+.0f}  ({len(sub)} runs, {nseed} seeds/gamma) ===")
-            print("gamma " + " ".join(f"{c[:9]:>9}" for c in COLS))
+            gs = sorted({r["gamma"] for r in sub})
+            print(f"\n=== block={blk}  overlap_sign={ov:+.0f}  ({len(sub)} runs, {len({r['rep'] for r in sub})} seeds/gamma) ===")
+            print("gamma  " + " ".join(f"{c[:9]:>9}" for c in COLS))
             table = {}
-            for g in GAMMAS:
-                gs = [r for r in sub if r["gamma"] == g]
-                if not gs:
-                    continue
-                table[g] = {k: mean(gs, k) for k in gs[0] if k not in TEXT}
-                print(f"{g:5.2f} " + " ".join(f"{table[g][c]:9.3f}" for c in COLS))
-            if len(table) == len(GAMMAS):
-                pen, msgs = pilot.check(table)
-                print(f"target penalty = {pen:.3f}" + ("" if blk == "main" and ov < 0 else "  (targets were calibrated on main, overlap -1)"))
-                for m in msgs:
-                    print("   -", m)
-            # exits: counts and timing
-            ticks = [int(x) for r in sub for x in r["exit_ticks"].split()]
-            print(f"exits: {len(ticks)} events / {int(sum(r['n_exit'] for r in sub))} of {25 * len(sub)} oligarch-runs; "
-                  f"civil {int(sum(r['n_exit_civil'] for r in sub))}, ruling {int(sum(r['n_exit_ruling'] for r in sub))}; "
-                  f"runs with >=1 exit {np.mean([r['n_exit'] >= 1 for r in sub]):.2f}, >=3 exits {np.mean([r['n_exit'] >= 3 for r in sub]):.2f}")
+            for g in gs:
+                gr = [r for r in sub if r["gamma"] == g]
+                table[g] = {k: mean(gr, k) for k in gr[0] if k not in TEXT}
+                print(f"{g:5.2f}{'*' if g in EDGES else ' '} " + " ".join(f"{table[g][c]:9.3f}" for c in COLS))
+            pen, msgs = pilot.check(table)
+            print(f"target penalty = {pen:.3f}  (* = edge; edges carry 'economy not destroyed' targets only)")
+            for m in msgs:
+                print("   -", m)
+            suite = [r for r in sub if r["gamma"] not in EDGES]
+            if not suite:
+                continue
+            ticks = [int(x) for r in suite for x in r["exit_ticks"].split()]
+            print(f"interior-suite exits: {len(ticks)} events in {25 * len(suite)} oligarch-runs; "
+                  f"civil {int(sum(r['n_exit_civil'] for r in suite))}, ruling {int(sum(r['n_exit_ruling'] for r in suite))}; "
+                  f"runs with >=1 exit {np.mean([r['n_exit'] >= 1 for r in suite]):.2f}, >=3 exits {np.mean([r['n_exit'] >= 3 for r in suite]):.2f}")
             if ticks:
                 bins = list(range(0, T + 1, 10))
                 h, _ = np.histogram(ticks, bins=bins)
-                print("exit-tick histogram (bins of 10): " + " ".join(f"{b}-{b + 10}:{c}" for b, c in zip(bins[:-1], h)))
-                print(f"exit ticks: min {min(ticks)}, median {int(np.median(ticks))}; before outcome window (tick<={o0}): "
+                print("exit-tick histogram: " + " ".join(f"{b}-{b + 10}:{c}" for b, c in zip(bins[:-1], h)))
+                print(f"exit ticks: min {min(ticks)}, median {int(np.median(ticks))}; share at tick<={o0} (before outcome window): "
                       f"{np.mean(np.array(ticks) <= o0):.2f}")
-            # pooled slopes by type (diagnostic)
-            sl = {k: (slope(sub, k, "civil"), slope(sub, k, "ruling")) for k in DVS}
-            print("pooled E-slope (civil, ruling, ratio): " + "; ".join(
+            sl = {k: (slope(suite, k, "civil"), slope(suite, k, "ruling")) for k in DVS}
+            print("pooled E-slope, interior (civil, ruling, ratio): " + "; ".join(
                 f"{k}: {a:.3g}, {b:.3g}, {a / b if b and not np.isnan(b) else np.nan:.2f}" for k, (a, b) in sl.items()))
     rt = mean(rows, "runtime")
-    print(f"\nruntime: {rt:.2f}s/run mean -> 1600 runs (800 main + 800 typeblind) ~ {1600 * rt / 60:.0f} min on one core")
+    print(f"\nruntime {rt:.2f}s/run mean -> 2000 runs (5 gammas x 2 overlaps x 100 reps x 2 blocks) ~ {2000 * rt / 60:.0f} min single core")
     print("windows: embed [%d,%d), outcome [%d,%d)" % (e0, e1, o0, o1))
+
+
+def typetest(nperm=20000):
+    """[D] Is civil-vs-ruling exit different from chance? Per seed: d = civil exit rate - ruling exit rate, averaged
+    over the interior gammas (same seed => same type placement across gammas, so gammas are NOT independent;
+    one d per seed). Sign-flip randomization test on the per-seed d. d > 0: civil exit more."""
+    rows = load()
+    rng = np.random.default_rng(0)
+    O = Params().n_countries * Params().oligs_per_country
+    print("civil-minus-ruling exit rate, interior gammas (sign-flip test over seeds)")
+    for blk, ov in sorted({(r["block"], r["overlap"]) for r in rows}):
+        sub = [r for r in rows if r["block"] == blk and r["overlap"] == ov and r["gamma"] not in EDGES]
+        d = np.array([np.mean([r["n_exit_civil"] / (O - r["n_ruling"]) - r["n_exit_ruling"] / r["n_ruling"]
+                               for r in sub if r["rep"] == rep]) for rep in sorted({r["rep"] for r in sub})])
+        if len(d) < 3:
+            continue
+        obs = d.mean()
+        null = (rng.choice([-1.0, 1.0], size=(nperm, len(d))) * d).mean(1)
+        p = float((np.abs(null) >= abs(obs) - 1e-12).mean())
+        print(f"  {blk:9s} overlap {ov:+.0f}: mean d = {obs:+.4f} (SE {d.std(ddof=1) / np.sqrt(len(d)):.4f}, {len(d)} seeds), p = {p:.4f}")
+
+
+def compare(a, b):
+    def L(path):
+        with open(path) as f:
+            return {(d["block"], float(d["gamma"]), float(d["overlap"]), int(float(d["rep"]))): d for d in csv.DictReader(f)}
+    A, B = L(a), L(b)
+    keys = sorted(set(A) & set(B))
+    print(f"{len(keys)} matching runs ({a} vs {b})")
+    if not keys:
+        print("!! no matching (block, gamma, overlap, rep) keys")
+        return
+    for c in ("growth_med", "exit_frac", "collapses_pc", "fshare", "E_mean", "offshore_share", "abuse_frac", "n_exit"):
+        d = np.array([abs(float(A[k][c]) - float(B[k][c])) for k in keys])
+        print(f"  {c:15s} max|diff| {np.nanmax(d):.3g}   mean|diff| {np.nanmean(d):.3g}")
+    mism = sum(A[k]["exit_ticks"] != B[k]["exit_ticks"] for k in keys)
+    print(f"  runs with different exit-tick lists: {mism} of {len(keys)}")
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--seeds", type=int, default=0)
+    ap.add_argument("--seed0", type=int, default=BASE_SEED, help="seed = seed0 + rep (default = production seeds)")
     ap.add_argument("--blocks", default="main,typeblind")
     ap.add_argument("--overlaps", default="-1,1")
+    ap.add_argument("--gammas", default=",".join(str(g) for g in GAMMAS))
     ap.add_argument("--workers", type=int, default=1)
+    ap.add_argument("--csv", default=CSV)
     ap.add_argument("--report", action="store_true")
+    ap.add_argument("--no-report", action="store_true")
+    ap.add_argument("--typetest", action="store_true")
+    ap.add_argument("--compare", nargs=2, metavar=("OLD", "NEW"))
     ap.add_argument("--price-check", action="store_true")
     ap.add_argument("--time", type=int, default=0, help="time N runs and exit")
     ap.add_argument("--set", nargs="*", default=[])
     a = ap.parse_args()
-    from dataclasses import replace
+    CSV = a.csv
     base = replace(Params(), **_parse_sets(a.set))
+    if a.compare:
+        compare(*a.compare)
     if a.time:
         for _ in range(a.time):
-            r = one((base, "main", 0.08, -1.0, 0))
-            print(f"1 run: {r['runtime']:.2f}s -> 1600 runs ~ {1600 * r['runtime'] / 60:.0f} min single core")
+            r = one((base, "main", 0.08, -1.0, 0, a.seed0))
+            print(f"1 run: {r['runtime']:.2f}s")
     if a.seeds:
-        run_all(base, [b for b in a.blocks.split(",") if b], [float(x) for x in a.overlaps.split(",")], a.seeds, a.workers)
-    if a.seeds or a.report:
-        report(base)
+        run_all(base, [b for b in a.blocks.split(",") if b], [float(x) for x in a.overlaps.split(",")],
+                [float(x) for x in a.gammas.split(",")], a.seeds, a.workers, a.seed0)
+    if a.report or (a.seeds and not a.no_report):
+        report()
+    if a.typetest:
+        typetest()
     if a.price_check:
         pilot.static_price_check(base)

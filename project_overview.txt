@@ -240,8 +240,10 @@ Page-level details of all citations must be verified before use.
     oligarch_type              CIVIL or RULING (static in v1)
     home_country
     industry_preferences[i]    Dirichlet shares summing to 1
-    risk_tolerance in [0,1]    flight/divest threshold on perceived B/theta:
-                               0.4 + 0.8 * tolerance
+    divestment_propensity in [0,1]  flight/divest threshold on perceived B/theta:
+                               0.4 + 0.8 * (1 - propensity); higher = earlier flight/divestment
+                               (renamed from risk_tolerance in C6; own assumption; drawn independent of
+                               type and home; the source of flight heterogeneity)
   State:
     capital                    LIQUID, deployable
     offshore_capital           safe from seizure; small return; one-way
@@ -311,33 +313,26 @@ Page-level details of all citations must be verified before use.
   reduces seizure and backlash. If S means regime favor, those effects
   would flip or need rethinking.
 
-4.5 CIVIL / RULING ASYMMETRY (own design; reuses ruling_home_mult)
-  This is the "formal position" side of the question. It is built so that
-  type matters through two offsetting channels:
-    RULING (at own home only), via ruling_home_mult = 1.5 [SLIDES 6]:
-      (a) capture effectiveness x1.5 at home (cheaper domestic capture);
-      (b) backlash weight x1.5 for capture at home (state control is more
-          visible/attributable);
-      (c) seizure fraction x1.5 (clipped to 1) if their OWN home country
-          collapses (entangled with the fallen regime); also enters
-          expected-seizure in deployment.
-    CIVIL (everywhere), via civil_cost_mult = 1.3 [SLIDES 6]:
-      running cost on ALL positions (domestic AND foreign) is x1.3 (legal
-      defense, lobbying, intermediaries); enters settle() and deployment
-      net attractiveness.
-  Slide 9 stylized fact, delivered by (c): after a nation falls, local
-  ruling oligarchs should lose more assets than local civil oligarchs.
-
-  IMPORTANT consequence for hypothesis P: civil_cost_mult is NOT home-only.
-  It raises the hurdle for civil deployment abroad, so type differences in
-  FOREIGN outcomes are expected to appear through the model's own
-  assumptions (see Section 8.2: foreign capture rate per unit foreign
-  capital was higher for civil, Cohen's d = 1.09). Hypothesis P ("similar
-  between types") therefore cannot be read off a bare null; it needs the
-  type-blind control (5.2) and an equivalence-style test (6.4).
-  The model_core.py / m0_model.py docstrings that say foreign-only rates
-  "should show no meaningful difference" are inconsistent with this and
-  were corrected in C5. [DONE]
+4.5 CIVIL / RULING ASYMMETRY (own design; revised C6)   [DEPARTURE from slide 6: civil_cost_mult, see 13.6]
+  CIVIL is the NEUTRAL baseline. RULING differs only through HOME ENTANGLEMENT, via ruling_home_mult = 1.5
+  [SLIDES 6]:
+    (a) capture effectiveness x1.5 at own home (cheaper domestic capture);
+    (b) backlash weight x1.5 for capture at own home (state control more visible/attributable);
+    (c) seizure fraction x1.5 (clipped to 1) if their OWN home country collapses (entangled with the fallen
+        regime); also enters expected seizure in deployment.
+  Abroad, both types follow IDENTICAL rules.
+  civil_cost_mult (slide 6: 1.3, legal-defense/lobbying/intermediary running-cost multiple on civil
+  positions) is 1.0 in the main design. Reasons: it is an own assumption with no source (Winters gives ruling
+  oligarchs no cost advantage abroad; state power does not travel); it made foreign LEVELS differ by type by
+  construction (8.2, d = 1.09); and it mechanically drove S (10-seed check at 1.3: civil exit ~23% vs ruling
+  ~5% in the main block, but 8.8% vs 7.5% in the type-blind block). Kept as a parameter and run at 1.3 as an
+  OFAT arm (run_design block "civil13").
+  Slide 9 stylized fact, delivered by (c): after a nation falls, local ruling oligarchs lose more than local
+  civil ones.
+  CONSEQUENCE FOR P: with type-symmetric foreign rules, similar E-slopes are partly expected by design. A
+  passing TOST shows that home-side type effects do not distort the E-slope; it does NOT show that type is
+  irrelevant abroad. State as a scope condition. The type-blind block (ruling_home_mult = 1.0; null
+  calibration, 5.2) still checks the pipeline: E x type slopes must be equal there.
 
 4.6 FLOW OF ONE TICK: slide 4 -> code mapping [SLIDES 4]
   STATUS (C5): rows tagged CODE-TODO below were implemented in Batches A-C: price_dynamics flag
@@ -431,7 +426,7 @@ Page-level details of all citations must be verified before use.
   the same seed across conditions (paired comparisons).
 
 4.8 PARAMETERS
-  Fixed by slides [SLIDES 6]: capture_rent = 0.5; civil_cost_mult = 1.3;
+  Fixed by slides [SLIDES 6]: capture_rent = 0.5; civil_cost_mult = 1.3 (slides; main design 1.0, see 4.5/13.6);
     ruling_home_mult = 1.5; 5 oligarchs/country; 5 countries.
   Swept [SLIDES 6]: gamma in {0.04, 0.08, 0.12, 0.16}; overlap_sign in
     {-1, +1}.
@@ -444,7 +439,7 @@ Page-level details of all citations must be verified before use.
     behavior (deploy_frac, logit_lambda, perc_sd, flight_*, divest_*,
     fire_sale_loss, offshore_return), and structure (n_ticks, ruling_frac,
     capital_scale, init_home_frac, a_ref).
-  Exit parameters: exit_floor_frac = 0.25, exit_window = 10 (placeholders; exit_drawdown removed). [IMPLEMENTED]
+  Exit parameters: exit_floor_frac = 0.40, exit_window = 10 (placeholders; exit_drawdown removed). [IMPLEMENTED]
   foreign_exposed (default True: collapse seizes foreign holdings) is
   load-bearing and must be defended/swept.
 
@@ -472,20 +467,21 @@ Page-level details of all citations must be verified before use.
 --------------------------------
 5.1 Main design
   Variable                              # values   Values
-  Backlash sensitivity (gamma)              4      0.04, 0.08, 0.12, 0.16
+  Backlash sensitivity (gamma) 5 0.04*, 0.08, 0.12, 0.16, 0.20*  (*edges, C6)
   Overlap sign                              2      -1 (rivalry), +1 (collusion)
   Capture rent share                        1      0.5
-  Civil transaction-cost multiplier         1      1.3
+  Civil transaction-cost multiplier 1 1.0 (slides 1.3; OFAT arm, C6)
   Ruling home-entanglement multiplier       1      1.5
   Oligarchs per country                     1      5
   Countries                                 1      5
   Replications per condition                1      100
-  Design replications: 4 x 2 x 100 = 800 runs; 25 oligarchs per run =
-  20,000 oligarch-run records.
+  Slide design: 4 x 2 x 100 = 800 runs. REVISED (C6): 5 gamma levels are run (1000 runs per block);
+  0.04 and 0.20 are EDGES (reported end-case behavior), so the P/S SUITE = interior gamma
+  {0.08, 0.12, 0.16} x 2 x 100 = 600 runs (15,000 oligarch-run records) per block. See 5.5b, 13.6.
   [IMPLEMENTED: run_design.py; seed = base_seed + rep in every condition (common random numbers).]
 
 5.2 Type-blind control block [AGREED]
-  Re-run with civil_cost_mult = ruling_home_mult = 1.0. With no built-in type
+  Re-run with ruling_home_mult = 1.0 (civil_cost_mult is already 1.0 in the main design after C6). With no built-in type
   asymmetry, any type effect found by the pipeline is an artifact; this is
   the null calibration for hypothesis P and for the type terms in S.
   Crossing/size of the control block: [OPEN; default full 4 x 2 x 100, reducible via
@@ -527,6 +523,26 @@ Page-level details of all citations must be verified before use.
   Pending: validation on >= 10 seeds, both overlap signs, type-blind block; exit-tick distribution
   (no exits before tick 50 in calibration runs); static-price check (5.4).
 
+5.5b Edge levels and target rules (C6; rules fixed BEFORE any gamma = 0.20 output was seen)
+  Gamma grid: 0.04, 0.08, 0.12, 0.16, 0.20. The P/S analysis SUITE uses the interior levels
+  {0.08, 0.12, 0.16}. 0.04 and 0.20 are EDGES: run and reported as end-case behavior, not in the suite.
+  The full calibration targets (5.5) apply to interior levels only. Edge levels carry only "economy not
+  destroyed" targets (median growth >= 1, exit <= 0.60, >= 12 of 25 active at outcome-window start, offshore
+  share <= 0.35, mean health >= 0.40) plus monotone non-decreasing collapses and exit across ALL levels.
+  Edge collapse and exit frequencies are the manipulated quantity, not targets.
+  10-seed validation (pre-C6 settings, civil_cost_mult 1.3): at gamma 0.04, collapses 0.08-0.10 per country
+  and exit 0-4%; the edge behaves as an endpoint should (the earlier 3-seed figures overstated it).
+  Pending after the civil_cost_mult change: re-validate the interior targets. Exit placeholders may need
+  retuning; only placeholders unrelated to P/S are touched, never E or type mechanics.
+
+5.5c Exit-floor retune (C7)
+  After civil_cost_mult went to 1.0, interior exit fell below target (gamma 0.08: 0.026 rivalry / 0.050
+  collusion at exit_floor_frac 0.25). The floor was swept 0.25/0.30/0.35/0.40 (20 seeds, main block, window
+  10 unchanged). At 0.40, exit at gamma 0.08/0.12/0.16 = 0.084/0.214/0.310 (rivalry) and 0.120/0.218/0.298
+  (collusion); the only interior miss is rivalry at 0.08 (0.084 vs 0.10). exit_floor_frac = 0.40 adopted.
+  A placeholder tuned for economic plausibility only, never toward P/S outcomes. Disclosure: calibration seeds
+  (1000-1019) coincide with the first 20 production replications (common random numbers).
+
 6. MEASURES AND ANALYSIS PLAN [SLIDES 7-8]
 ------------------------------------------
 Unit of analysis: oligarch within run (country as a nested grouping).
@@ -556,7 +572,7 @@ Everything below is computed from per-tick logs (Section 10, item 4).
     survives only as a diagnostic (foreign_load, domestic_load).
 
 6.3 Exit and asset loss for S
-  - EXIT [AGREED]: ACTIVE capital (liquid + positions; OFFSHORE EXCLUDED) below exit_floor_frac (0.25) x
+  - EXIT [AGREED]: ACTIVE capital (liquid + positions; OFFSHORE EXCLUDED) below exit_floor_frac (0.40) x
     INITIAL active capital for exit_window (10) consecutive ticks. Absorbing; exit_tick recorded.
     Floor and window are placeholders: confirm against the exit-tick distribution before fixing windows.
   - ON EXIT [IMPLEMENTED]: positions are LIQUIDATED at fire_sale_loss (30%); proceeds + liquid capital go
@@ -577,7 +593,7 @@ Everything below is computed from per-tick logs (Section 10, item 4).
     covariates E, type, overlap_sign, initial wealth and foreign presence. E x type similarity is judged by
     an equivalence test (TOST); margin ~20-25% of the pooled slope, with 10% and 30% as sensitivity, FIXED
     BEFORE real runs. E^2 x type tests curvature; per-type slope positivity is reported. The type-blind
-    block (5.2) is the null calibration: E x type slopes must be equal when both multipliers = 1.0.
+    block (5.2) is the null calibration: E x type slopes must be equal when ruling_home_mult = 1.0 (no type asymmetry).
     Report who drops out by type (survivorship) and partial-window robustness.
   Disclosure: E -> capture is partly BUILT IN via eta (partner presence in the capture multiplier). P is
     therefore the net strength of that channel against backlash, seizure and depletion, plus type
@@ -722,7 +738,7 @@ regenerated under the Section 5 design before anything is cited.
 -----------------------------------------------------------
  [x]  1 5 per country; exact 12/13 type split (ruling_frac)
  [x]  2 static prices behind price_dynamics (default False; stream still drawn)
- [x]  3 exit rule: persistent active capital + fire-sale liquidation (floor 0.25, window 10)
+ [x]  3 exit rule: persistent active capital + fire-sale liquidation (floor 0.40, window 10)
  [x]  4 per-tick logging (runlog.py; one .npz per run; to_frames())
  [x]  5 per-tick embeddedness (World.embeddedness) + windows (pilot.windows)
  [ ]  6 DV computation from logs (Batch E1)
@@ -824,6 +840,15 @@ omitting them.
   - Record: exit write-off replaced by fire-sale liquidation (6.3, 9.1); exited agents' offshore stops
     earning; goodwill rows drift harmlessly; the debt clamp is original limited liability and never binds.
   - Section 8 REMAINS stale (pre-alignment M0 results); regenerate before citing.
+
+
+13.6 Departures from the slides added in C6 (and why)
+  - civil_cost_mult 1.3 -> 1.0 in the main design (slide value kept as an OFAT arm). Reason: own assumption
+    with no source (4.5); it built foreign type differences and most of the S type gap by construction.
+    Civil is now the neutral baseline; ruling differs only by home entanglement (ruling_home_mult).
+  - Gamma grid 4 -> 5 levels; edges 0.04 and 0.20; analysis suite = interior {0.08, 0.12, 0.16} (5.1, 5.5b).
+  - risk_tolerance renamed divestment_propensity (= 1 - old draw; same flight/divestment threshold). Not on
+    the slides; own assumption; renamed to avoid confusion with the risk-attitude literature (4.3).
 
 
 APPENDIX: EXAMPLE COMPANIES / FAMILIES TO CONSIDER
