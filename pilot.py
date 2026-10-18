@@ -8,11 +8,12 @@ see project_overview.txt Sections 2 and 5.5). Windows scale with n_ticks:
 
 USAGE
     python pilot.py --report            # target table over 5 gamma levels (0.04, 0.20 = edges)
-    python pilot.py --price-check       # static-price adequacy check (5.4)
+    python pilot.py --price-check       # flow-based static-price check (5.4; = test_batchD.flow_price_check)
 """
 from __future__ import annotations
 
 import argparse
+import warnings
 from dataclasses import replace
 from typing import Dict, Iterable, List, Tuple
 
@@ -33,6 +34,14 @@ def windows(T: int) -> Tuple[Tuple[int, int], Tuple[int, int]]:
 
 # ----------------------------------------------------------------------------
 def summarize(rl: RunLog, p: Params) -> Dict[str, float]:
+    """Scalar run summaries used by the calibration targets. Empty-slice / all-NaN RuntimeWarnings are
+    silenced (NaN is the intended result there)."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        return _summarize(rl, p)
+
+
+def _summarize(rl: RunLog, p: Params) -> Dict[str, float]:
     """Scalar run summaries used by the calibration targets."""
     T = rl.T
     (e0, e1), (o0, o1) = windows(T)
@@ -107,7 +116,9 @@ def run_many(p: Params, seeds: Iterable[int]) -> List[Dict[str, float]]:
 
 def mean_table(rows: List[Dict[str, float]]) -> Dict[str, float]:
     keys = rows[0].keys()
-    return {k: float(np.nanmean([r[k] for r in rows])) for k in keys}
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        return {k: float(np.nanmean([r[k] for r in rows])) for k in keys}
 
 
 # ----------------------------------------------------------------------------
@@ -195,38 +206,15 @@ def print_table(table, cols=("growth_med", "exit_frac", "collapses_pc", "fshare"
 
 
 # ----------------------------------------------------------------------------
-def static_price_check(p: Params, seeds=range(6)):
-    """[5.4] Are static prices enough for opportunities to vary? Measures, over the run:
-    (a) time variation (CV) of the marginal extraction return q*G*exp(-qX) across (country, industry)
-        pools -- driven by depletion, congestion and collapse, NOT price;
-    (b) allocation shifts: for active oligarchs, the L1 change in normalized position shares per tick;
-    (c) share of oligarch-ticks whose top (country, industry) target changes."""
-    cvs, shifts, top_changes = [], [], []
-    for s in seeds:
-        w = M0World(p, s)
-        prev_share, prev_top = None, None
-        marg = []
-        for _ in range(p.n_ticks):
-            w.step()
-            A = w.stack_positions()
-            G = np.stack([c.industry_output for c in w.countries])
-            marg.append(p.q * G * np.exp(-p.q * A.sum(0)))
-            tot = A.sum((1, 2), keepdims=True)
-            share = np.divide(A, tot, out=np.zeros_like(A), where=tot > 1e-9).reshape(w.O, -1)
-            top = share.argmax(1)
-            act = np.array([o.active for o in w.oligarchs]) & (tot.reshape(-1) > 1e-9)
-            if prev_share is not None:
-                both = act & prev_act
-                if both.any():
-                    shifts.append(np.abs(share - prev_share).sum(1)[both].mean())
-                    top_changes.append((top != prev_top)[both].mean())
-            prev_share, prev_top, prev_act = share, top, act
-        marg = np.array(marg)                                         # (T,C,NI)
-        mu, sd = marg.mean(0), marg.std(0)
-        cvs.append(float(np.nanmean(sd[mu > 1e-6] / mu[mu > 1e-6])))
-    print(f"static-price check ({len(list(seeds))} seeds): CV over time of marginal return per pool = {np.mean(cvs):.2f}; "
-          f"mean L1 allocation shift per tick = {np.mean(shifts):.3f}; top-target change rate = {np.mean(top_changes):.3f}")
-    return dict(cv=float(np.mean(cvs)), shift=float(np.mean(shifts)), top_change=float(np.mean(top_changes)))
+def static_price_check(p: Params = None, seeds=None):
+    """[5.4] SUPERSEDED. The old stock-share drift check was inconclusive (sunk stock moves slowly). The flow-based
+    check (where NEW capital goes) lives in test_batchD.flow_price_check; this wrapper just calls it
+    (arguments ignored; result recorded in project_overview.txt 5.4: DYNAMIC)."""
+    try:
+        import test_batchD
+    except ImportError as e:
+        raise SystemExit(f"cannot import test_batchD ({e}); run: python -c \"import test_batchD as t; t.flow_price_check()\"")
+    return test_batchD.flow_price_check()
 
 
 def report(p: Params = None, seeds=range(8)):

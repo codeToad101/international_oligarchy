@@ -2,3 +2,4 @@ venv/
 demo/
 __pycache__/
 review.txt
+pilot_out/

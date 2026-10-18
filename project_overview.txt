@@ -500,6 +500,16 @@ Page-level details of all citations must be verified before use.
   unswept elasticity (not exogenous random shocks: shared price shocks
   create correlated booms/busts among co-located, embedded oligarchs and
   could spuriously inflate the embeddedness effect under test).
+  RESULT (D, flow-based check; flow_price_check in test_batchD.py): DYNAMIC. Static prices are KEPT; no price
+  rule added. Setup: post-burn-in ticks, interior gamma {0.08, 0.12, 0.16} x both overlap signs x 8 seeds
+  (9700-9707). Decision rule fixed BEFORE running: FROZEN if top-target change < 0.05 and aggregate change < 0.05;
+  DYNAMIC if top-target change >= 0.10; else AMBIGUOUS. Observed: share of oligarch-ticks whose largest
+  new-capital target switched = 0.285 (62,830 oligarch-tick pairs); mean tick-to-tick total-variation distance of
+  the aggregate new-capital allocation = 0.223; median time-CV of marginal extraction returns = 0.221.
+  The earlier stock-share check (marginal-return CV 0.53, top-target change 0.016) was inconclusive because
+  sunk positions drift slowly even when new decisions move; the flow-based check supersedes it. Caveat for the
+  paper: switching can partly reflect near-ties in the logit weights, so the check shows allocations are NOT
+  frozen, not that they track price-like signals.
 
 
 5.5 Calibration [AGREED approach; values PROVISIONAL]
@@ -521,7 +531,7 @@ Page-level details of all citations must be verified before use.
   positions and relieve extraction).
   Windows: burn-in first 20% of ticks, embedding 20-50%, outcome 50-100% (pilot.windows).
   Pending: validation on >= 10 seeds, both overlap signs, type-blind block; exit-tick distribution
-  (no exits before tick 50 in calibration runs); static-price check (5.4).
+  (no exits before tick 50 in calibration runs); (static-price check done: 5.4, DYNAMIC).
 
 5.5b Edge levels and target rules (C6; rules fixed BEFORE any gamma = 0.20 output was seen)
   Gamma grid: 0.04, 0.08, 0.12, 0.16, 0.20. The P/S analysis SUITE uses the interior levels
@@ -542,6 +552,15 @@ Page-level details of all citations must be verified before use.
   (collusion); the only interior miss is rivalry at 0.08 (0.084 vs 0.10). exit_floor_frac = 0.40 adopted.
   A placeholder tuned for economic plausibility only, never toward P/S outcomes. Disclosure: calibration seeds
   (1000-1019) coincide with the first 20 production replications (common random numbers).
+
+5.5d Record: interior exit rate below target at low gamma (D; RECORDED, not relaxed)
+  With the frozen calibration (100 ticks; exit_floor_frac 0.40, exit_window 10), interior exit rates at gamma
+  0.08 run about 0.056-0.09 against the 0.10 lower target. Decision: RECORD as a known deviation; no parameter
+  or target is changed (further retuning would be tuning toward an outcome-adjacent quantity). Held-out seeds
+  5000-5019 confirmed the calibration generalizes. Robustness: an OFAT arm on exit_floor_frac (0.35, 0.40, 0.45)
+  shows whether the P and S conclusions depend on it (Section 7).
+  Exits cluster late (median about tick 77), so the outcome-window sample is right-censored: report survivorship
+  and who drops out by type, with partial-window robustness checks (6.4).
 
 6. MEASURES AND ANALYSIS PLAN [SLIDES 7-8]
 ------------------------------------------
@@ -604,7 +623,7 @@ Everything below is computed from per-tick logs (Section 10, item 4).
     are uninformative: lead with effect sizes.
   Never tune toward P or S outcomes (5.5). Sandbox lacks statsmodels / pyarrow: models run locally.
   OFAT sensitivity (Section 7): slide-9 constants capture_rent, civil_cost_mult, ruling_home_mult,
-    zeta_seize, PLUS eta, h_star, abuse_coef, w_scar.
+    zeta_seize, PLUS eta, h_star, abuse_coef, w_scar, exit_floor_frac (0.35/0.40/0.45).
 
 6.5 Figures [SLIDES 7-8]
   1. Interaction plot (grouped scatterplot with fits): embeddedness and
@@ -622,7 +641,9 @@ Statistics:
     same-industry contribution to G and hence of E).
   - One-factor-at-a-time sensitivity analysis across the key unverifiable
     constants named on slide 9: capture_rent, civil_cost_mult,
-    ruling_home_mult, zeta_seize (Borgonovo et al. 2022). Broader sweeps
+    ruling_home_mult, zeta_seize (Borgonovo et al. 2022).
+    Also (D): eta, h_star, abuse_coef, w_scar, and exit_floor_frac (0.35, 0.40, 0.45; record in 5.5d);
+    the civil_cost_mult arm includes 1.3 (run_design block civil13). Broader sweeps
     (zeta_cap, zeta_bl, eta, lam_cap, seize_frac, h_width, foreign_exposed)
     are robustness extras if time allows.
   - Edge-case checks [PROPOSED list]: capture_rent = 0; the type-blind
@@ -727,7 +748,7 @@ regenerated under the Section 5 design before anything is cited.
   - Load-bearing assumptions to defend / sweep: capture_rent anchor; foreign_exposed = True.
   - Goodwill measures are endogenous; avoid causal partnership language.
   - Scale: whether results survive beyond 25 oligarchs; runtime of 800+ runs.
-  - Static-price check (5.4): result pending.
+  - Static-price check (5.4): RESOLVED (D): DYNAMIC; prices stay static.
   - FUTURE EXTENSIONS (state as scope condition in the paper): exit liquidation currently destroys the 30%
     discount and sends proceeds offshore to the exiting oligarch; nothing goes to the state, rivals or
     population. Possible: the discount accrues to rival oligarchs (survivor gains; exit/strength feedback)
@@ -748,8 +769,8 @@ regenerated under the Section 5 design before anything is cited.
  [x] 10 docstrings corrected (type claim)
  [x] 11 m0_notes.md references replaced
  [x] 12 stale "halo" references removed
- [ ] 13 tests (Batch D1)
- [~] 14 pilot: calibration provisional (3 seeds); validation C(a)-(c) and static-price check pending
+ [x] 13 tests (Batch D1-D5; test_batchD.py, 21/21 pass)
+ [x] 14 pilot: calibration frozen (5.5, 5.5c, 5.5d); static-price check done (5.4: DYNAMIC)
  [ ] 15 README, requirements, ODD
  Added: [x] depletion/abuse + scarcity->backlash; [x] abuse-based havoc; [x] loss accounting;
         [ ] eta = 0 ablation (D3); [ ] OFAT harness (E4)
