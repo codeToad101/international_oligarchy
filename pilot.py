@@ -211,7 +211,9 @@ def static_price_check(p: Params = None, seeds=None):
     check (where NEW capital goes) lives in test_batchD.flow_price_check; this wrapper just calls it
     (arguments ignored; result recorded in project_overview.txt 5.4: DYNAMIC)."""
     try:
-        import test_batchD
+        import os, sys
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "analysis"))
+        import analysis.test_batchD as test_batchD
     except ImportError as e:
         raise SystemExit(f"cannot import test_batchD ({e}); run: python -c \"import test_batchD as t; t.flow_price_check()\"")
     return test_batchD.flow_price_check()

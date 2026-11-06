@@ -17,11 +17,17 @@ OUTPUT
                             n_ticks, path, runtime_s, exit_frac, collapses  (+ windows in each run's meta)
 USAGE
     python run_design.py --out out --dry-run
-    python run_design.py --out out --reps 100 --blocks main,typeblind --workers 4
+    python run_design.py --out out --workers 4        # block reps = BLOCK_REPS (main 1000, typeblind 100, civil13 100); --reps overrides ALL blocks
     python run_design.py --out pilot_out --reps 3 --blocks main          # quick smoke run
     python run_design.py --out out --set n_ticks=150                      # override any Params field
 """
 from __future__ import annotations
+
+# [prod-prep] single-threaded BLAS in every process (set BEFORE numpy is imported; spawn workers re-import this module,
+# and setdefault keeps any value you exported yourself)
+import os as _os
+for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "NUMEXPR_NUM_THREADS"):
+    _os.environ.setdefault(_v, "1")
 
 import argparse
 import csv
@@ -42,7 +48,10 @@ from pilot import windows, EDGES
 
 GAMMAS = (0.04, 0.08, 0.12, 0.16, 0.20)   # [C6] 0.04 and 0.20 are EDGES (pilot.EDGES)
 OVERLAPS = (-1.0, 1.0)
-REPS = 100
+REPS = 100   # legacy; per-block defaults are BLOCK_REPS
+BLOCK_REPS = {"main": 1000, "typeblind": 100, "civil13": 100}   # [prod-prep] project_overview 13.6; not to be adjusted after production
+MANIFEST_FIELDS = ["edge", "run_id", "block", "gamma", "overlap_sign", "rep", "seed", "config_hash", "git_commit",
+                   "n_ticks", "path", "runtime_s", "exit_frac", "collapses"]
 BASE_SEED = 1000
 BLOCKS = {"main": {}, "typeblind": dict(civil_cost_mult=1.0, ruling_home_mult=1.0),
           "civil13": dict(civil_cost_mult=1.3)}      # [C6] OFAT arm: the slides' civil cost multiplier
@@ -119,8 +128,8 @@ def _parse_sets(items: List[str]) -> dict:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="out")
-    ap.add_argument("--reps", type=int, default=REPS)
-    ap.add_argument("--reps-typeblind", type=int, default=None, help="default: same as --reps")
+    ap.add_argument("--reps", type=int, default=None, help="override reps for ALL blocks (default: BLOCK_REPS)")
+    ap.add_argument("--reps-typeblind", type=int, default=None, help="override the typeblind block only")
     ap.add_argument("--blocks", default="main,typeblind", help="also available: civil13 (OFAT arm)")
     ap.add_argument("--gammas", default=",".join(str(g) for g in GAMMAS))
     ap.add_argument("--workers", type=int, default=os.cpu_count() or 1)
@@ -132,7 +141,9 @@ def main():
 
     base = replace(Params(), **_parse_sets(a.set))
     blocks = [b for b in a.blocks.split(",") if b]
-    reps = {b: (a.reps_typeblind if (b == "typeblind" and a.reps_typeblind is not None) else a.reps) for b in BLOCKS}
+    reps = {b: (a.reps if a.reps is not None else BLOCK_REPS[b]) for b in BLOCKS}
+    if a.reps_typeblind is not None:
+        reps["typeblind"] = a.reps_typeblind
     jobs = make_jobs(base, a.out, blocks, reps, a.base_seed, gammas=tuple(float(x) for x in a.gammas.split(',')))
     print(f"{len(jobs)} runs: " + ", ".join(f"{b}={sum(j['block'] == b for j in jobs)}" for b in blocks)
           + f"  | commit={jobs[0]['git_commit'] if jobs else 'n/a'}")
@@ -143,26 +154,33 @@ def main():
         jobs = [j for j in jobs if not os.path.exists(j["path"])]
         print(f"resuming: {len(jobs)} runs remaining")
     t0 = time.time()
-    rows = []
-    if a.workers <= 1:
-        for k, j in enumerate(jobs):
-            rows.append(run_one(j))
-            if (k + 1) % 50 == 0:
-                print(f"  {k + 1}/{len(jobs)}  {time.time() - t0:.0f}s")
-    else:
-        with Pool(a.workers) as pool:
-            for k, r in enumerate(pool.imap_unordered(run_one, jobs, chunksize=4)):
-                rows.append(r)
-                if (k + 1) % 50 == 0:
-                    print(f"  {k + 1}/{len(jobs)}  {time.time() - t0:.0f}s")
     mpath = os.path.join(a.out, "manifest.csv")
-    exists = os.path.exists(mpath)
-    with open(mpath, "a", newline="") as f:
-        wtr = csv.DictWriter(f, fieldnames=list(rows[0].keys()) if rows else [])
-        if not exists and rows:
-            wtr.writeheader()
-        wtr.writerows(sorted(rows, key=lambda r: r["run_id"]))
-    print(f"done: {len(rows)} runs in {time.time() - t0:.0f}s -> {a.out}")
+    need_header = (not os.path.exists(mpath)) or os.path.getsize(mpath) == 0
+    if not need_header:
+        with open(mpath, newline="") as f0:
+            head = next(csv.reader(f0), [])
+        if head != MANIFEST_FIELDS:
+            raise SystemExit(f"{mpath} has a different header than this run_design.py writes; move it aside first")
+    n_done = 0
+    pool = Pool(a.workers) if a.workers > 1 else None
+    try:
+        with open(mpath, "a", newline="") as fh:              # [prod-prep] manifest row written + flushed as each run finishes
+            wtr = csv.DictWriter(fh, fieldnames=MANIFEST_FIELDS)
+            if need_header:
+                wtr.writeheader()
+                fh.flush()
+            it = map(run_one, jobs) if pool is None else pool.imap_unordered(run_one, jobs, chunksize=4)
+            for r in it:
+                wtr.writerow(r)
+                fh.flush()
+                n_done += 1
+                if n_done % 250 == 0:
+                    print(f"  {n_done}/{len(jobs)}  {time.time() - t0:.0f}s")
+    finally:
+        if pool is not None:
+            pool.terminate()
+            pool.join()
+    print(f"done: {n_done} runs in {time.time() - t0:.0f}s -> {a.out}")
 
 
 if __name__ == "__main__":

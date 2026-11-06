@@ -6,6 +6,7 @@ Run LOCALLY after run_design.py (needs pandas; nothing else beyond numpy and the
     python analysis_tables.py --out out                          # main + typeblind, interior gammas only
     python analysis_tables.py --out out --blocks main --period 5 # coarser person-period (smaller S table)
     python analysis_tables.py --out out --include-edges          # also gamma 0.04 / 0.20
+    python analysis_tables.py --out out --s-max-rep 200          # S table only from reps < 200 (1000 reps ~ 14M rows); P table keeps ALL reps
 Writes <out>/tables/P_table.csv and <out>/tables/S_person_period.csv.gz, then prints a short summary.
 
 P TABLE: one row per oligarch per run (ALL 25, so dropout can be reported by type).
@@ -30,6 +31,10 @@ S TABLE: person-period, one row per oligarch per period START while active (peri
   cum_seized_rel_lag        (collapse seizure + resident liquid hit) cumulative / initial_active   [headline]
   cum_seized_forced_rel_lag same + forced-liquidation loss                                         [robustness]
   E_foreign_lag, E_all_lag, E_pos_lag, E_neg_lag, pos_foreign_lag, S_home_lag, S_foreign_mean_lag
+  rec10_pre_lag             [EXPLORATORY, not a headline covariate] log1p(min(seizure over the last 10 ticks / active capital at the
+                            end of the tick BEFORE that window, 10)); denominator floored at 5% of initial active capital; in the first
+                            ticks (no earlier tick) it is initial active capital. Purpose: test whether the headline seized fraction's
+                            protective sign is a size/deployment artifact (overview 6.3, 13.7). Feeds exploratory model M5 in analysis_S.py.
   Static: ruling, initial_active, log_initial_active, divestment_propensity, gamma, overlap_sign, block, ids,
     t (tick number at period start), post_burn (period starts after the burn-in).
   Voluntary-divestment loss is EXCLUDED (circular); current active capital is NOT a covariate (it IS the exit rule).
@@ -127,6 +132,8 @@ def s_table_run(rl, k: int = 1) -> "pd.DataFrame":
     f = lambda key: ol[key].astype(float)
     cum_c = np.cumsum(f("loss_seized") + f("loss_home_hit"), axis=0) / ia
     cum_f = np.cumsum(f("loss_seized") + f("loss_home_hit") + f("loss_forced_liq"), axis=0) / ia
+    seiz_abs = np.cumsum(f("loss_seized") + f("loss_home_hit"), axis=0)   # absolute cumulative seizure (for rec10_pre)
+    ac_abs = f("active_capital")
     lag = {"E_foreign_lag": f("E_foreign"), "E_all_lag": f("E_all"), "E_pos_lag": f("E_pos"), "E_neg_lag": f("E_neg"),
            "pos_foreign_lag": f("pos_foreign"), "S_home_lag": f("S_home"), "S_foreign_mean_lag": f("S_foreign_mean")}
     parts, last_s = [], None
@@ -135,9 +142,13 @@ def s_table_run(rl, k: int = 1) -> "pd.DataFrame":
         last_s = s
         if idx.size == 0:
             continue
+        rec10 = seiz_abs[s - 1] - (seiz_abs[s - 11] if s >= 11 else 0.0)              # seizure over ticks s-9..s
+        acpre = ac_abs[s - 11] if s >= 11 else ia                                     # active capital before that window
+        rec10_pre = np.log1p(np.minimum(rec10 / np.maximum(acpre, 0.05 * ia), 10.0))
         d = dict(oligarch=idx, t=np.full(idx.size, s + 1), post_burn=np.full(idx.size, int(s >= e0)),
                  event=ex[s:s + k][:, idx].any(0).astype(int),
-                 cum_seized_rel_lag=cum_c[s - 1, idx], cum_seized_forced_rel_lag=cum_f[s - 1, idx])
+                 cum_seized_rel_lag=cum_c[s - 1, idx], cum_seized_forced_rel_lag=cum_f[s - 1, idx],
+                 rec10_pre_lag=rec10_pre[idx])
         for key, arr in lag.items():
             d[key] = arr[s - 1, idx]
         parts.append(d)
@@ -171,7 +182,9 @@ def main():
     ap.add_argument("--include-edges", action="store_true", help="also gamma 0.04 / 0.20 (default: P/S suite = interior)")
     ap.add_argument("--period", type=int, default=1, help="ticks per person-period row (default 1)")
     ap.add_argument("--tables-dir", default=None)
+    ap.add_argument("--s-max-rep", type=int, default=None, help="build the S table only from reps < N (P table always uses all reps)")
     a = ap.parse_args()
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
     from runlog import RunLog
     blocks = [b for b in a.blocks.split(",") if b]
     files = sorted(glob.glob(os.path.join(a.out, "runs", "*.npz")))
@@ -184,12 +197,15 @@ def main():
         if m.get("block") not in blocks or (m.get("edge") and not a.include_edges):
             continue
         P.append(p_table_run(rl))
-        S.append(s_table_run(rl, a.period))
+        if a.s_max_rep is None or int(m["rep"]) < a.s_max_rep:
+            S.append(s_table_run(rl, a.period))
         n += 1
         if n % 200 == 0:
             print(f"  {n} runs processed")
     if not P:
         sys.exit("no runs matched --blocks / edge filter")
+    if not S:
+        sys.exit("--s-max-rep left no runs for the S table")
     Pt, St = pd.concat(P, ignore_index=True), pd.concat(S, ignore_index=True)
     for c in St.columns:
         if St[c].dtype == np.float64 and c not in ("gamma", "overlap_sign"):
