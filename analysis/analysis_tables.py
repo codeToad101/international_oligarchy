@@ -21,6 +21,8 @@ P TABLE: one row per oligarch per run (ALL 25, so dropout can be reported by typ
     cap_share_mean / cap_share_median : per-tick foreign / (foreign + domestic) capture gained   [DV, robustness]
     cap_rate   : foreign capture gained per unit foreign position (sum over active ticks / sum of position)
     cap_abs    : mean foreign capture gained per active tick
+    dom_abs    : mean DOMESTIC capture gained per active outcome tick (diagnostic: lets a capture share's numerator, cap_abs,
+                and denominator be told apart; not an added DV)
     hav_share_mean / hav_share_median, hav_rate, hav_abs : same treatments for foreign havoc
   IDs: run_id, block, gamma, overlap_sign, rep, seed, oligarch, home, country_run (random-intercept group).
   Static: ruling, initial_wealth, initial_active, divestment_propensity, home_resilience, exit_tick, n_active_out.
@@ -113,7 +115,7 @@ def p_table_run(rl) -> "pd.DataFrame":
         fp_emb=emb("pos_foreign"),
         with_foreign_emb=_nan(np.nanmean, np.where(a_e, (g("pos_foreign", e0, e1) > 0.1).astype(float), np.nan)),
         cap_share_mean=_nan(np.nanmean, cs_), cap_share_median=_nan(np.nanmedian, cs_),
-        cap_rate=rate(fc), cap_abs=mean_act(fc),
+        cap_rate=rate(fc), cap_abs=mean_act(fc), dom_abs=mean_act(dc),
         hav_share_mean=_nan(np.nanmean, hs_), hav_share_median=_nan(np.nanmedian, hs_),
         hav_rate=rate(fh), hav_abs=mean_act(fh),
     ))

@@ -4,6 +4,7 @@ analysis_P.py -- [E2] hypothesis P: does foreign capture / havoc rise with embed
 Run LOCALLY on the E1 table:   python analysis_P.py --out out            (needs pandas; statsmodels for --engine mixed)
                                python analysis_P.py --out out --robust   (adds the robustness DVs)
                                python analysis_P.py --out pilot_out --engine fe    (numpy-only fallback)
+                               python analysis_P.py --out out --diagnostics   (descriptive: what drives the E slope; --bins adds E deciles)
 
 DESIGN (fixed before real runs; see project_overview.txt 6.4)
   Population A (primary) = in_primary (active at outcome-window start; outcomes over active ticks, n_active_out controlled).
@@ -178,6 +179,8 @@ def main():
     ap.add_argument("--blocks", default="main,typeblind")
     ap.add_argument("--engine", default="mixed", choices=["mixed", "fe"])
     ap.add_argument("--robust", action="store_true")
+    ap.add_argument("--diagnostics", action="store_true", help="descriptive EDA of what drives the E slope (overview 6.4, 13.8)")
+    ap.add_argument("--bins", action="store_true", help="with --diagnostics: also print E deciles")
     a = ap.parse_args()
     engine = a.engine
     if engine == "mixed" and not HAVE_SM:
@@ -224,7 +227,167 @@ def main():
     bad = ok[~ok.converged] if "converged" in ok else ok.iloc[0:0]
     if len(bad):
         print(f"WARNING: {len(bad)} fits flagged non-converged (see P_results.csv)")
+    if a.diagnostics:
+        run_diagnostics(P, [b for b in a.blocks.split(",") if b], a.bins)
 
+
+# ---------------------------------------------------------------------------------------------- diagnostics (--diagnostics)
+# DESCRIPTIVE only (no verdicts, no p-values). Purpose: see what drives the E slope (overview 13.8). Population A, interior gammas,
+# one block x overlap-sign group at a time. Sections: 1 E distribution; 2 DV distributions; 3 E deciles (--bins); 4 slope ladder
+# (E alone, then +ruling, +fp_emb, +log wealth, +n_active, +pf_out; E_pos / E_neg separately); 5 residual checks; 6 per-run jackknife.
+# pf_out = cap_abs / cap_rate (mean foreign position in the outcome window) is derived FROM the DV, so the "+pf_out" step is
+# partly an identity: read the +fp_emb step (embedding window) as the clean evidence. dom_abs (if in the table) is shown as one more
+# level DV so a share's numerator (cap_abs) and denominator (dom_abs) can be told apart. TRANSFORMS are judged by distribution /
+# residual shape ONLY, never by slope sign (circular). All fits here are pooled OLS with CR1 run-clustered SEs (not the planned mixed model).
+DIAG_LOG = LOG_DVS | {"dom_abs"}
+
+
+def _skew_kurt(x):
+    x = np.asarray(x, float)
+    x = x[np.isfinite(x)]
+    s = x.std()
+    if len(x) < 8 or s < 1e-12:
+        return float("nan"), float("nan")
+    u = (x - x.mean()) / s
+    return float((u ** 3).mean()), float((u ** 4).mean() - 3)
+
+
+def _ols_cr(d, y, xs):
+    X = np.column_stack([np.ones(len(d))] + [d[c].to_numpy(float) for c in xs])
+    Y = d[y].to_numpy(float)
+    Ai = np.linalg.pinv(X.T @ X)
+    b = Ai @ X.T @ Y
+    u = Y - X @ b
+    ug, gi = np.unique(d["run_id"].to_numpy(), return_inverse=True)
+    S = np.zeros((len(ug), X.shape[1]))
+    np.add.at(S, gi, X * u[:, None])
+    G = len(ug)
+    V = Ai @ (S.T @ S) @ Ai * G / max(G - 1, 1)
+    return dict(b=dict(zip(["const"] + xs, b)), se=dict(zip(["const"] + xs, np.sqrt(np.diag(V)))), u=u, fit=X @ b)
+
+
+def _diag_prep(sub, dv):
+    d = sub.dropna(subset=[dv, "E_foreign", "fp_emb", "initial_wealth"]).copy()
+    if len(d) < 50:
+        return None
+    y = d[dv].astype(float)
+    if dv in DIAG_LOG:
+        y = np.log1p(y / max(float(y.mean()), 1e-12))
+    d["y"], d["Ez"] = z(y), z(d["E_foreign"])
+    d["Epz"], d["Enz"] = z(d["E_pos"]), z(d["E_neg"])
+    d["fpz"], d["lwz"], d["nz"] = z(d["fp_emb"]), z(np.log(d["initial_wealth"])), z(d["n_active_out"])
+    if {"cap_abs", "cap_rate"} <= set(d.columns):
+        ok = d["cap_rate"] > 1e-9
+        d["pfo"] = np.where(ok, d["cap_abs"] / np.where(ok, d["cap_rate"], 1.0), np.nan)
+        d["pfz"] = z(d["pfo"].fillna(d["pfo"].mean()))
+    for g in sorted(d["gamma"].unique())[1:]:
+        d[f"gm{g:.2f}"] = (d["gamma"] == g).astype(float)
+    return d
+
+
+def _fwl(d, ctrl):
+    """Run-FE slope of y on Ez with controls partialled out (Frisch-Waugh); per-run sums allow an approximate leave-one-run-out."""
+    M = d[["y", "Ez"] + ctrl].to_numpy(float)
+    gi = pd.factorize(d["run_id"])[0]
+    cnt = np.bincount(gi).astype(float)
+    mu = np.zeros((cnt.size, M.shape[1]))
+    np.add.at(mu, gi, M)
+    mu /= cnt[:, None]
+    D = M - mu[gi]
+    C = D[:, 2:]
+    C = C[:, C.std(0) > 1e-10]
+    R = D[:, :2] - (C @ np.linalg.lstsq(C, D[:, :2], rcond=None)[0] if C.shape[1] else 0)
+    sxy, sxx = np.bincount(gi, weights=R[:, 1] * R[:, 0]), np.bincount(gi, weights=R[:, 1] ** 2)
+    return sxy.sum() / sxx.sum(), sxy, sxx
+
+
+def _diag_group(A, name, dvs, bins):
+    print(f"\n{'=' * 100}\n{name}: n={len(A)} oligarchs, runs={A['run_id'].nunique()}")
+    print("-- 1. E distribution (embedding window; E_foreign primary) --")
+    for lab, g in [("all", A), ("civil", A[A.ruling == 0]), ("ruling", A[A.ruling == 1])]:
+        e = g["E_foreign"]
+        print(f"  {lab:6s} n={len(g):5d} E==0: {np.mean(np.abs(e) < 1e-9):.3f}  E<0: {np.mean(e < -1e-9):.3f}  mean {e.mean():+.4f} sd {e.std():.4f} "
+              f"q05/25/50/75/95 " + "/".join(f"{q:+.3f}" for q in e.quantile([.05, .25, .5, .75, .95])))
+    print(f"  E_pos mean {A.E_pos.mean():+.4f} sd {A.E_pos.std():.4f} | E_neg mean {A.E_neg.mean():+.4f} sd {A.E_neg.std():.4f} | "
+          f"corr(E, fp_emb) {A.E_foreign.corr(A.fp_emb):+.2f}  corr(E, with_foreign_emb) {A.E_foreign.corr(A.with_foreign_emb):+.2f}  "
+          f"corr(E, log wealth) {A.E_foreign.corr(np.log(A.initial_wealth)):+.2f}  corr(E_pos, E_neg) {A.E_pos.corr(A.E_neg):+.2f}")
+    print("-- 2. DV distributions (raw; log1p(x/mean) for rate / level DVs) --")
+    print("  dv               mean     sd   skew  exkurt  zero%   | transformed skew/exkurt | civil mean  ruling mean")
+    for dv in dvs:
+        x = A[dv].dropna()
+        sk, ku = _skew_kurt(x)
+        sk2, ku2 = _skew_kurt(np.log1p(x / max(x.mean(), 1e-12)) if dv in DIAG_LOG else x)
+        print(f"  {dv:15s} {x.mean():8.4f} {x.std():7.4f} {sk:6.2f} {ku:7.2f} {np.mean(x.abs() < 1e-12):6.1%}   | {sk2:6.2f} {ku2:7.2f}            | "
+              f"{A.loc[A.ruling == 0, dv].mean():9.4f} {A.loc[A.ruling == 1, dv].mean():9.4f}")
+    d0 = _diag_prep(A, "cap_share_mean")
+    if d0 is not None and bins:
+        d0["bin"] = pd.qcut(d0["E_foreign"].rank(method="first"), 10, labels=False)
+        print("-- 3. E deciles (within group): E mean, foreign presence, outcome-window foreign position, DV means by type --")
+        print("  bin   E_mean    fp_emb  pf_out  | cap_share civil/ruling | hav_share civil/ruling | cap_rate | cap_abs")
+        for b, g in d0.groupby("bin"):
+            c, r = g[g.ruling == 0], g[g.ruling == 1]
+            print(f"  {b:3d} {g.E_foreign.mean():+8.4f} {g.fp_emb.mean():7.3f} {g.pfo.mean():7.3f}  | {c.cap_share_mean.mean():.3f}/{r.cap_share_mean.mean():.3f}"
+                  f"          | {c.hav_share_mean.mean():.3f}/{r.hav_share_mean.mean():.3f}          | {g.cap_rate.mean():8.3f} | {g.cap_abs.mean():8.3f}")
+    print("-- 4. E-slope ladder (OLS, gamma dummies, CR1 by run; SD of DV per SD of E; +-1.96 SE) --")
+    print("  dv               E alone      +ruling      +fp_emb      +log wealth  +n_active    +pf_out      | E_pos alone   E_neg alone   (jointly: E_pos, E_neg)")
+    prepped = []
+    for dv in dvs:
+        d = _diag_prep(A, dv)
+        if d is None:
+            continue
+        prepped.append((dv, d))
+        gm = [c for c in d.columns if c.startswith("gm")]
+        rE = _ols_cr(d, "y", ["Ez"] + gm)
+        cells, cur = [f"{rE['b']['Ez']:+.3f}±{1.96 * rE['se']['Ez']:.3f}"], []
+        for s_ in ("ruling", "fpz", "lwz", "nz", "pfz"):
+            cur.append(s_)
+            if s_ == "pfz" and "pfz" not in d.columns:
+                cells.append("      n/a    ")
+                continue
+            r = _ols_cr(d, "y", ["Ez"] + cur + gm)
+            cells.append(f"{r['b']['Ez']:+.3f}±{1.96 * r['se']['Ez']:.3f}")
+        rp, rn, rj = (_ols_cr(d, "y", ["Epz", "ruling"] + gm), _ols_cr(d, "y", ["Enz", "ruling"] + gm),
+                      _ols_cr(d, "y", ["Epz", "Enz", "ruling"] + gm))
+        print(f"  {dv:15s} " + " ".join(f"{c:12s}" for c in cells) +
+              f" | {rp['b']['Epz']:+.3f}      {rn['b']['Enz']:+.3f}      ({rj['b']['Epz']:+.3f}, {rj['b']['Enz']:+.3f})")
+    print("-- 5. Residuals of the analysis_P-style model (pooled OLS: E, ruling, E x ruling, fp, wealth, n_active, gamma) --")
+    print("  dv               resid skew exkurt  corr(|res|,fit)  corr(|res|,E)  ICC run  ICC country-run")
+    for dv, d in prepped:
+        d["Er"] = d["Ez"] * d["ruling"]
+        gm = [c for c in d.columns if c.startswith("gm")]
+        r = _ols_cr(d, "y", ["Ez", "ruling", "Er", "fpz", "lwz", "nz"] + gm)
+        u = r["u"]
+        sk, ku = _skew_kurt(u)
+
+        def icc(col):
+            g = pd.Series(u).groupby(d[col].to_numpy())
+            m, n = g.transform("mean").to_numpy(), g.transform("size").to_numpy()
+            within = np.sum((u - m) ** 2) / max(len(u) - g.ngroups, 1)
+            between = max(np.var(m) - within / max(n.mean(), 1), 0)
+            return between / (between + within) if between + within > 0 else float("nan")
+        print(f"  {dv:15s} {sk:10.2f} {ku:6.2f}  {np.corrcoef(np.abs(u), r['fit'])[0, 1]:+14.2f}  {np.corrcoef(np.abs(u), d['Ez'])[0, 1]:+13.2f}  "
+              f"{icc('run_id'):7.3f}  {icc('country_run'):9.3f}")
+    print("-- 6. Per-run jackknife of the E slope (run FE; ruling, fp, wealth, n_active partialled out; controls held at full-sample values = approximate) --")
+    print("  dv               slope   jackknife SE  max |change|  (run)           sign changes   top-3 runs' share of influence")
+    for dv, d in prepped:
+        sl, sxy, sxx = _fwl(d, ["ruling", "fpz", "lwz", "nz"])
+        G = len(sxy)
+        loo = (sxy.sum() - sxy) / (sxx.sum() - sxx)
+        se, ch = np.sqrt((G - 1) / G * np.sum((loo - loo.mean()) ** 2)), np.abs(loo - sl)
+        rid, top = pd.factorize(d["run_id"])[1], np.argsort(-np.abs(loo - sl))[:3]
+        print(f"  {dv:15s} {sl:+.3f}  {se:12.4f}  {ch.max():12.4f}  {rid[top[0]]:15s} {int(np.sum(np.sign(loo) != np.sign(sl))):8d}   {ch[top].sum() / max(ch.sum(), 1e-12):6.1%}")
+
+
+def run_diagnostics(P, blocks, bins=False):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)          # constant columns (e.g. E_neg = 0) give NaN correlations
+        for blk in blocks:
+            for s in sorted(P["overlap_sign"].unique()):
+                sub = P[(P["block"] == blk) & (P["overlap_sign"] == s)]
+                if len(sub):
+                    dvs = PRIMARY_DVS + ROBUST_DVS + (("dom_abs",) if "dom_abs" in sub.columns else ())
+                    _diag_group(sub, f"block={blk} overlap_sign={s:+.0f} (population A)", dvs, bins)
+    print("\nDiagnostics are descriptive. Choose DV transforms from sections 2 and 5 only, never by slope sign.")
 
 if __name__ == "__main__":
     main()

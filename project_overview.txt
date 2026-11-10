@@ -641,6 +641,14 @@ Everything below is computed from per-tick logs (Section 10, item 4).
     term; 90% CI inside the margin), sensitivity 10% and 20%. The type-blind block is the positive control: if it
     fails at 15%, report the test as precision-limited and never widen the margin. If the pooled slope's 95% CI
     includes 0, equivalence is "not assessable". Share DVs used as is; level and rate DVs as log1p(x / mean).
+  P diagnostics (analysis_P.py --diagnostics; DESCRIPTIVE, no verdicts; pooled OLS with run-clustered errors, NOT the planned mixed
+    model): E distribution, DV distributions, an E-slope "ladder" (E alone, then + type, foreign presence, log initial wealth,
+    n_active_out, and the derived outcome-window foreign position pf_out = cap_abs / cap_rate), E_pos and E_neg entered separately,
+    residual checks (skew, spread, run and country-within-run ICC) and a per-run jackknife of the E slope. Purpose: show how much of
+    the E slope is foreign-position size, and which part of E (partner vs rival presence) carries it. pf_out is derived from the DV,
+    so its step is partly an identity; the fp_emb step is the clean one. dom_abs (mean domestic capture per active outcome tick, in
+    the P table) lets a share's numerator (cap_abs) and denominator be told apart; it is diagnostic, not an added DV. Transforms are
+    judged by distribution and residual shape only, never by slope sign. The frozen DV conventions above stand.
   OFAT sensitivity (Section 7): slide-9 constants capture_rent, civil_cost_mult, ruling_home_mult,
     zeta_seize, PLUS eta, h_star, abuse_coef, w_scar, exit_floor_frac (0.35/0.40/0.45).
 
@@ -917,6 +925,30 @@ omitting them.
   - Exit is wealth-based, so S is partly mechanical (6.3). The production S analysis reports the headline as pre-specified,
     including its protective OR, plus M5 labeled exploratory.
 
+13.8 P diagnostics (E2; pilot30, population A, interior gamma, 90 runs per block x sign; no production result seen).
+  REGENERATE from production before citing. Slopes are per SD of E in SD of the DV.
+  - Share DVs: E-slopes are positive in both overlap signs and in the type-blind block (with type, foreign presence, log wealth,
+    n_active and gamma controlled): capture share about +0.32 (rivalry) and +0.13 (collusion); havoc share about +0.19 and +0.11.
+    Per-run jackknife: no sign changes; dropping any one run moves a slope by at most about 0.02.
+  - E is entangled with foreign position size (corr(E, foreign presence) about 0.6). Adding foreign presence cuts the raw capture-
+    share slope by about a quarter under rivalry (+0.50 to +0.37) and about half under collusion (+0.32 to +0.17); it stays positive.
+    The collusion capture-share slope is the smallest and the most precision-limited.
+  - Rate and absolute-level DVs have NEGATIVE E-slopes (capture rate about -0.3; absolute capture +0.2 to +0.3 raw, about -0.2
+    to -0.3 once foreign presence is held fixed). Reading, not tested directly: E tracks the size of an oligarch's foreign
+    position; the exponential-catch form has diminishing returns to position, so per-unit returns fall as E rises, and absolute
+    capture is explained by size, not by E. A consequence of the design, not a bug. P is therefore supported for the SHARE DVs;
+    rate and level DVs are reported as robustness, with this reading.
+  - E_pos (partner presence) carries the positive share slope; E_neg (rival presence) has the opposite sign. This is the eta
+    channel (6.4 disclosure), a built-in mechanism; the eta = 0 ablation is its test.
+  - Type: ruling oligarchs show a higher raw capture share than civil in the main block (+0.03 rivalry, +0.06 collusion) and not
+    in the type-blind block (-0.02, +0.01). Unadjusted and UNEXPLAINED: ruling_home_mult inflates ruling's DOMESTIC capture,
+    which would lower their foreign share, so the sign is not obvious. dom_abs (numerator vs denominator) is the next check; the
+    head-to-head in analysis_P quantifies it. Do not describe a type effect until this is understood.
+  - Distributions: share DVs are near-symmetric (residual skew within about +-0.3). Rate and level DVs are skewed (raw skew 1 to
+    4) and remain skewed after log1p(x / mean) (residual skew up to about 1.4). Decision: the frozen conventions stand (6.4); not
+    chosen by slope sign. E is never exactly 0 in pilot30, so the "mass at zero" concern did not arise.
+  - Clustering: residual ICC by country-within-run is up to about 0.59 (havoc share) and 0.12 to 0.17 (capture share), so run and
+    country-within-run random intercepts are warranted.
 
 APPENDIX: EXAMPLE COMPANIES / FAMILIES TO CONSIDER
 --------------------------------------------------
