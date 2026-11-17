@@ -4,3 +4,8 @@ __pycache__/
 review.txt
 pilot30/
 pilot_out/
+out/
+ofat/
+pres_notes.txt
+ablation_eta0/
+typeblind1000/

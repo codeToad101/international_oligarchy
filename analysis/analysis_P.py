@@ -79,13 +79,14 @@ class Fit:
 
 def fit_mixed(d, cols):
     f = "y ~ " + " + ".join(cols)
-    md = smf.mixedlm(f, d, groups=d["run_id"], vc_formula={"cty": "0 + C(country_run)"})
+    md = smf.mixedlm(f, d, groups=d["run_id"], re_formula="1", vc_formula={"cty": "0 + C(country_run)"})
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         res = md.fit(reml=True)
     k = len(res.fe_params)
     vf = float(np.var(np.asarray(res.model.exog, float) @ np.asarray(res.fe_params, float)))
-    vr = float(np.asarray(res.cov_re).ravel()[0]) if getattr(res, "cov_re", None) is not None else 0.0
+    cr = np.asarray(res.cov_re) if getattr(res, "cov_re", None) is not None else np.zeros(0)
+    vr = float(cr.ravel()[0]) if cr.size else 0.0
     vc = float(np.sum(res.vcomp)) if getattr(res, "vcomp", None) is not None and len(res.vcomp) else 0.0
     return Fit(res.fe_params.index, res.fe_params.values, np.asarray(res.cov_params())[:k, :k], len(d),
                bool(getattr(res, "converged", True)), vf / (vf + vr + vc + float(res.scale)))

@@ -3,6 +3,14 @@ INTERNATIONAL OLIGARCHIC INTERACTION -- A TRANSNATIONAL ABM
 ===========================================================
 Project overview and model specification (CONSOLIDATED).
 
+CURRENT STATUS (Nov 12, 2026)
+  DONE: production (11,000 runs), tables, P and S analyses, eta=0 ablation runs, OFAT runs (19 arms),
+    24 figures, 1000-rep type-blind rerun, docking lite vs Schaefer (1954).
+  PRODUCTION RESULTS: Section 14. Sections 8, 13.7, 13.8 are PILOT-ONLY history; do not cite their numbers.
+  NOT DONE: eta=0 ablation numbers not yet read; stylized-fact checks 3 and 4; case-study comparison;
+    WGI / resource-rent anchoring; same-seed determinism check; hand-recompute of one DV; README/ODD/Zenodo.
+  Disclosures: validation items in 5.5 were skipped before OFAT/production.
+
 This file REPLACES both the previous project_overview.txt and m0_notes.md.
 Model code lives in model_core.py and m0_model.py.
 
@@ -32,7 +40,7 @@ CONTENTS
    3. Theoretical grounding and sources
    4. Model architecture (agents, relationships, asymmetry, flows,
       slide-to-code mapping)
-   5. Virtual experiment (design)
+   5. Virtual experiment (design; 5.6 production pipeline)
    6. Measures and analysis plan
    7. Validation strategy
    8. Preliminary observations (M0 build; NOT results)
@@ -40,7 +48,9 @@ CONTENTS
   10. Code alignment checklist
   11. Anticipated contributions and write-up plan
   12. Timeline, risks, fallbacks
-  13. Consolidation log (what changed and why)
+  13. Consolidation log (what changed and why; 13.9 Batch F departures)
+  14. Production results (supersedes pilot figures)
+  15. Open items / handoff
   Appendix: example companies / families
 
 
@@ -176,10 +186,8 @@ Page-level details of all citations must be verified before use.
     protocol); Grimm et al. (2005, pattern-oriented modeling; 2010, ODD);
     Liang & Zeger (1986) (clustered/GEE logistic); Nakagawa & Schielzeth
     (marginal/conditional R2 for mixed models).
-  - Existing ABMs to differentiate from: OLIGO (Mason & Sengupta) and the
-    Ukrainian oligarchic-economy ABM (arXiv). Neither models cross-border
-    capture and capital flight as linked decisions. [verify; neither is in
-    the slide reference list]
+  - "OLIGO (Wright & Sengupta 2015, JASSS 18(2):3; arXiv 1310.7134; oligarch campaign donations in agent-based
+   spatial elections: domestic only, no cross-border capture, resource depletion or collapse)
 
 3.3 OWN ASSUMPTIONS, NOT FROM ANY PAPER (state in the paper)
   Logistic collapse hazard; partial-adjustment (persistent) capture stock;
@@ -218,8 +226,13 @@ Page-level details of all citations must be verified before use.
 4.2 AGENT 1: Country (the state)
   Fixed traits:
     baseline_wealth            scales resident oligarchs' starting capital
-    institutional_resilience   rho in [0.2,1]; harder capture for everyone,
-                               faster backlash decay
+    institutional_resilience   rho ~ U(0.2, 1), drawn per country at init. Acts in TWO places: (i) capture
+                               effectiveness of every oligarch in that country is multiplied by (1 - rho)
+                               (World.capture_multiplier); (ii) backlash decay = b_decay x (1 + rho). It does
+                               NOT enter the collapse hazard (that uses theta = collapse_threshold ~ U(0.5, 1)).
+                               Host-country rho is not a covariate in analysis_P (only the country-within-run
+                               random intercept absorbs it); home_resilience is in the P table but unused.
+                               [LIMITATION / optional covariate]
     collapse_threshold         theta; backlash level at which hazard is half
                                of h_max
     industry_endowment[i]      specialist/generalist split (2 specialty
@@ -303,6 +316,7 @@ Page-level details of all citations must be verified before use.
     - capture effectiveness x clip(1 + zeta_cap*S, 0.2, inf)
     - capture effectiveness x clip(1 + eta*sum_b G_ab*presence_bc, 0.3, 2)
       (signed: rival presence hurts, partner presence helps)
+    - capture effectiveness x (1 - rho_c) (institutional resilience of the country)
     - backlash weight of an oligarch's capture x clip(1 - zeta_bl*S, 0.1,
       inf) x foreignness factor (1 + foreign_backlash_mult)
     - seizure on collapse x (1 - zeta_seize*max(S,0))
@@ -325,8 +339,8 @@ Page-level details of all citations must be verified before use.
   positions) is 1.0 in the main design. Reasons: it is an own assumption with no source (Winters gives ruling
   oligarchs no cost advantage abroad; state power does not travel); it made foreign LEVELS differ by type by
   construction (8.2, d = 1.09); and it mechanically drove S (10-seed check at 1.3: civil exit ~23% vs ruling
-  ~5% in the main block, but 8.8% vs 7.5% in the type-blind block). Kept as a parameter and run at 1.3 as an
-  OFAT arm (run_design block "civil13").
+  ~5% in the main block, but 8.8% vs 7.5% in the type-blind block). Kept as a parameter and run at 0.7 and
+  1.3 as OFAT arms (gamma 0.12, 30 reps). The separate 100-rep civil13 block was not run [CONFIRM].
   Slide 9 stylized fact, delivered by (c): after a nation falls, local ruling oligarchs lose more than local
   civil ones.
   CONSEQUENCE FOR P: with type-symmetric foreign rules, similar E-slopes are partly expected by design. A
@@ -386,6 +400,21 @@ Page-level details of all citations must be verified before use.
                                      B/theta ratio -> capital flight (liquid
                                      -> offshore) and divestment above the
                                      oligarch's risk threshold.
+                                     Code facts (flee_and_divest): risk =
+                                     value-weighted mean over countries of
+                                     perceived B/theta (weights: positions
+                                     plus liquid capital at home); flight =
+                                     clip(flight_gain x (risk - threshold),
+                                     0, flight_max) x liquid capital moved
+                                     offshore; per-country divestment dv =
+                                     clip(divest_gain x (ratio - threshold),
+                                     0, divest_max) of positions at
+                                     fire_sale_loss. threshold = 0.4 + 0.8 x
+                                     (1 - divestment_propensity). Perception
+                                     is noisy CURRENT backlash (perc_sd), not
+                                     forward-looking; the forward-looking
+                                     element is expected seizure in step 8
+                                     deployment.
   8 Oligarchs decide what to do      Step 8. Logit over ALL (country,
     with current assets/revenue      industry) pairs with positive
                                      risk-adjusted marginal return
@@ -465,27 +494,30 @@ Page-level details of all citations must be verified before use.
 
 5. VIRTUAL EXPERIMENT [SLIDES 6]
 --------------------------------
-5.1 Main design
+5.1 Main design (the table actually run)
   Variable                              # values   Values
-  Backlash sensitivity (gamma) 5 0.04*, 0.08, 0.12, 0.16, 0.20*  (*edges, C6)
+  Backlash sensitivity (gamma)              5      0.04*, 0.08, 0.12, 0.16, 0.20*
+                                                   (*edges; P/S suite = interior three)
   Overlap sign                              2      -1 (rivalry), +1 (collusion)
   Capture rent share                        1      0.5
-  Civil transaction-cost multiplier 1 1.0 (slides 1.3; OFAT arm, C6)
-  Ruling home-entanglement multiplier       1      1.5
+  Civil transaction-cost multiplier         1      1.0 (slides 1.3 = OFAT arm)
+  Ruling home-entanglement multiplier       1      1.5 (type-blind block 1.0)
   Oligarchs per country                     1      5
   Countries                                 1      5
-  Replications per condition                1      1000 (main; type-blind 100; see 13.6)
-  Slide design: 4 x 2 x 100 = 800 runs. REVISED (C6): 5 gamma levels are run (1000 runs per block);
-  0.04 and 0.20 are EDGES (reported end-case behavior), so the P/S SUITE = interior gamma
-  {0.08, 0.12, 0.16} x 2 x 100 = 600 runs (15,000 oligarch-run records) per block. See 5.5b, 13.6.
+  Replications per condition                1      1000 (main); 100 (type-blind production);
+                                                   type-blind interior rerun at 1000
+  Design replications: 5 x 2 x 1000 = 10,000 main runs; type-blind 5 x 2 x 100 = 1,000; P/S suite
+  (interior) 3 x 2 x 1000 = 6,000 main. Slide design was 4 x 2 x 100 = 800.
+  0.04 and 0.20 are EDGES (reported end-case behavior); the P/S SUITE is interior gamma {0.08, 0.12, 0.16}.
+  See 5.5b, 13.6.
   [IMPLEMENTED: run_design.py; seed = base_seed + rep in every condition (common random numbers).]
 
 5.2 Type-blind control block [AGREED]
   Re-run with ruling_home_mult = 1.0 (civil_cost_mult is already 1.0 in the main design after C6). With no built-in type
   asymmetry, any type effect found by the pipeline is an artifact; this is
   the null calibration for hypothesis P and for the type terms in S.
-  Crossing/size of the control block: [OPEN; default full 4 x 2 x 100, reducible via
-  run_design --reps-typeblind].
+  RESOLVED: production type-blind = 5 gamma x 2 signs x 100 reps = 1,000 runs (positive control 0/4, 100 reps).
+  Rerun for precision (typeblind1000/): interior gamma x 2 signs x 1000 reps = 6,000 runs; control 2/4 (14.4).
 
 5.3 Run length [OPEN]
   Current n_ticks = 100. Choose n_ticks and a burn-in so runs contain enough
@@ -532,6 +564,8 @@ Page-level details of all citations must be verified before use.
   Windows: burn-in first 20% of ticks, embedding 20-50%, outcome 50-100% (pilot.windows).
   Pending: validation on >= 10 seeds, both overlap signs, type-blind block; exit-tick distribution
   (no exits before tick 50 in calibration runs); (static-price check done: 5.4, DYNAMIC).
+  Pending items (validation on >= 10 seeds, both signs, type-blind, exit-tick distribution) were SKIPPED
+  before OFAT/production because of the deadline. Disclose; do not claim they were done.
 
 5.5b Edge levels and target rules (C6; rules fixed BEFORE any gamma = 0.20 output was seen)
   Gamma grid: 0.04, 0.08, 0.12, 0.16, 0.20. The P/S analysis SUITE uses the interior levels
@@ -561,6 +595,24 @@ Page-level details of all citations must be verified before use.
   shows whether the P and S conclusions depend on it (Section 7).
   Exits cluster late (median about tick 77), so the outcome-window sample is right-censored: report survivorship
   and who drops out by type, with partial-window robustness checks (6.4).
+
+5.6 Pipeline and extra runs
+  run_pipeline.py steps: production, tables, P, S, ablation, ofat, figures; logs in out/logs/<step>.txt.
+  Always passes --robust and --diagnostics to analysis_P (the P step took ~64 min with mixed models).
+  Timings (4 workers): production 491 s (0.18 s/run), tables 164 s, P 3821 s, S 127 s, ablation 61 s,
+  OFAT 132 s, figures 44 s; whole pipeline 4841 s.
+  Tables: P rows 165,000 (6,600 runs, interior gamma only); S rows 4,205,514 (main 2.55M + type-blind 1.29M after
+  the t >= 10 filter); events main 6,662, type-blind 2,945.
+  eta=0 ablation: main block, gamma 0.08/0.12/0.16 x 2 signs x 100 reps = 600 runs (CRN seeds 1000-1099).
+  OFAT: baseline + 9 params x low/high = 19 arms, main block, gamma 0.12, both signs, 30 reps = 1,140 runs
+  (CRN). Levels are own +-50%-style choices. Arms: capture_rent .25/.75; civil_cost_mult .7/1.3;
+  ruling_home_mult 1.0/2.0; zeta_seize .25/.75; eta .05/.30; h_star .5/.7; abuse_coef .20/.60;
+  w_scar .25/.75; exit_floor_frac .35/.45. NOT RUN: zeta_cap, zeta_bl, lam_cap, seize_frac, h_width,
+  foreign_exposed, other gammas, and the 7 edge-case checks (capture_rent=0, all-civil/all-ruling, short/long runs).
+  Type-blind rerun: python run_design.py --out typeblind1000 --blocks typeblind --gammas 0.08,0.12,0.16
+  --reps 1000 ... then analysis_tables.py / analysis_P.py with --out typeblind1000 (6,000 runs).
+  Docking: docking_schaefer.py (project root) -> out/docking/.
+
 
 6. MEASURES AND ANALYSIS PLAN [SLIDES 7-8]
 ------------------------------------------
@@ -623,13 +675,24 @@ Everything below is computed from per-tick logs (Section 10, item 4).
     BEFORE real runs. E^2 x type tests curvature; per-type slope positivity is reported. The type-blind
     block (5.2) is the null calibration: E x type slopes must be equal when ruling_home_mult = 1.0 (no type asymmetry).
     Report who drops out by type (survivorship) and partial-window robustness.
+  Implemented model (analysis_P.py): REML MixedLM, y ~ Ez + ruling + Ez:ruling + fp + log wealth +
+    n_active + gamma dummies; groups = run_id; variance component for country-within-run (re_formula='1' set
+    explicitly). All DVs/predictors z-scored within each fit sample. One fit per block x overlap sign x
+    population x DV. Fix applied Nov 2026: without re_formula, statsmodels returned an empty cov_re and every fit
+    raised IndexError; fixed with re_formula='1' and a guarded vr = 0 if empty. TOST: Delta = m x |pooled slope|,
+    90% CI of the Ez:ruling coefficient inside (-Delta, +Delta), m = 0.15 (0.10, 0.20 sensitivity).
   Disclosure: E -> capture is partly BUILT IN via eta (partner presence in the capture multiplier). P is
     therefore the net strength of that channel against backlash, seizure and depletion, plus type
     similarity. Run an eta = 0 ablation (expected to collapse the E -> capture slope).
   S: PERSON-PERIOD clustered logit (cluster on run; Liang & Zeger 1986), covariates lagged 1 tick. Nested:
     M0 (initial active capital, gamma, overlap) -> + seized fraction -> + E -> + type. Report odds ratios,
-    delta-AUC / BIC, marginal R2 (Nakagawa & Schielzeth), drop-one-from-full. With ~20,000 rows p-values
-    are uninformative: lead with effect sizes.
+    delta-AUC / BIC, McFadden pseudo-R2 (marginal R2 is defined for mixed models and is used for P only),
+    drop-one-from-full. With ~20,000 rows p-values are uninformative: lead with effect sizes.
+  S implementation: S estimator = pooled logit, Newton/IRLS, CR1 run-clustered SEs (same point
+    estimates as a GEE with independence working correlation; Liang & Zeger 1986). S table = main reps < 200
+    (--s-max-rep 200, table-size limit only: 1000 reps would be ~14M person-period rows); type-blind all 100
+    reps. Rows with t + period - 1 < 10 (before any exit is possible) are dropped. Time terms t, t^2 are
+    collinear (ORs ~128 and ~0.05); never report them.
   S exploratory model M5 (analysis_S.py; NOT pre-specified): M5 = M3 + rec10_pre (z-scored); increments are reported against M3.
     Read it only as a check on the headline seized-fraction sign. If rec10_pre is a risk (OR > 1) while the headline stays
     protective, the headline is likely a size/deployment proxy (consistent with, not proof of: opposite-signed correlated terms
@@ -670,9 +733,10 @@ Statistics:
     constants named on slide 9: capture_rent, civil_cost_mult,
     ruling_home_mult, zeta_seize (Borgonovo et al. 2022).
     Also (D): eta, h_star, abuse_coef, w_scar, and exit_floor_frac (0.35, 0.40, 0.45; record in 5.5d);
-    the civil_cost_mult arm includes 1.3 (run_design block civil13). Broader sweeps
-    (zeta_cap, zeta_bl, eta, lam_cap, seize_frac, h_width, foreign_exposed)
-    are robustness extras if time allows.
+    the civil_cost_mult arm runs at 0.7 and 1.3 (gamma 0.12, 30 reps; the separate 100-rep civil13 block was
+    not run [CONFIRM]). Broader sweeps
+    (zeta_cap, zeta_bl, lam_cap, seize_frac, h_width, foreign_exposed)
+    are robustness extras if time allows; eta is now an OFAT arm. Also: docking lite vs Schaefer (14.7).
   - Edge-case checks [PROPOSED list]: capture_rent = 0; the type-blind
     setting (multipliers = 1); foreign_exposed = False; extreme gamma; very
     short and very long runs; all-civil and all-ruling populations.
@@ -701,6 +765,7 @@ BEFORE slide alignment (10 oligarchs, AR(1) prices ON, drawdown-based exit,
 placeholder parameters, 30-150 seeds, 100 ticks). It is retained as
 development history and as a sanity check on mechanisms. It must be
 regenerated under the Section 5 design before anything is cited.
+(Superseded by Section 14 for production results.)
 
 8.1 Mechanism sanity checks (descriptive, placeholder parameters)
   - Baseline: about 0.8 collapses per country per run, exit about 18%,
@@ -782,16 +847,16 @@ regenerated under the Section 5 design before anything is cited.
     and/or flows to the population (the deferred immiseration channel).
 
 
-10. CODE ALIGNMENT CHECKLIST  (status after Batches A-C + C5)
+10. CODE ALIGNMENT CHECKLIST  (status after Batches A-C + C5; updated Batch F)
 -----------------------------------------------------------
  [x]  1 5 per country; exact 12/13 type split (ruling_frac)
  [x]  2 static prices behind price_dynamics (default False; stream still drawn)
  [x]  3 exit rule: persistent active capital + fire-sale liquidation (floor 0.40, window 10)
  [x]  4 per-tick logging (runlog.py; one .npz per run; to_frames())
  [x]  5 per-tick embeddedness (World.embeddedness) + windows (pilot.windows)
- [ ]  6 DV computation from logs (Batch E1)
+ [x]  6 DV computation (analysis_tables.py)
  [x]  7 design runner (run_design.py; CRN seeds; manifest; type-blind block)
- [ ]  8 analysis scripts: mixed models, clustered logit, marginal R2, TOST, figures (Batch E)
+ [x]  8 analysis scripts (tables, P, S, figures; run on production)
  [x]  9 H-b / H-c renamed to P / S
  [x] 10 docstrings corrected (type claim)
  [x] 11 m0_notes.md references replaced
@@ -799,8 +864,9 @@ regenerated under the Section 5 design before anything is cited.
  [x] 13 tests (Batch D1-D5; test_batchD.py, 21/21 pass)
  [x] 14 pilot: calibration frozen (5.5, 5.5c, 5.5d); static-price check done (5.4: DYNAMIC)
  [ ] 15 README, requirements, ODD
- Added: [x] depletion/abuse + scarcity->backlash; [x] abuse-based havoc; [x] loss accounting;
-        [ ] eta = 0 ablation (D3); [ ] OFAT harness (E4)
+ Added: [x] eta=0 ablation RUNS (numbers unread)  [x] OFAT harness + 19 arms  [x] run_pipeline.py
+        [x] docking lite (docking_schaefer.py)  [x] 1000-rep type-blind rerun
+ Still open: [ ] 15 README/requirements/ODD  [ ] determinism + hand-recompute checks  [ ] stylized facts 3, 4
 
 
 11. ANTICIPATED CONTRIBUTIONS AND WRITE-UP PLAN [SLIDES 10]
@@ -901,7 +967,9 @@ omitting them.
     run, with the type-blind block as positive control (6.4).
   - Replications (pre-production; fixed BEFORE any production run): main block 1000 reps per condition (5 gamma levels x
     2 overlap signs = 10,000 runs; the P/S suite, interior gamma only, is 6,000), type-blind 100 (1,000 runs; suite 600),
-    civil13 OFAT arm 100. Seeds = base_seed + rep (main 1000-1999, type-blind and civil13 1000-1099): common random numbers.
+    civil_cost_mult run at 0.7 and 1.3 as OFAT arms (gamma 0.12, 30 reps; the separate 100-rep civil13 block was
+    not run [CONFIRM]). Seeds = base_seed + rep (main 1000-1999, type-blind 1000-1099; OFAT arms reuse
+    production seeds): common random numbers.
     Replaces the slides' 100. Reason: PRECISION, not a model change. The SE of an estimate falls with 1/sqrt(reps), and the
     15% TOST margin needs SE <= margin / 2.93 for 80% planning power (n proportional to (z_(1-alpha) + z_(1-beta/2))^2
     sigma^2 / Delta^2; TOSTER power_t_TOST). On the 30-rep pilot (seeds 20000+, disjoint from production) planning power was
@@ -949,6 +1017,111 @@ omitting them.
     chosen by slope sign. E is never exactly 0 in pilot30, so the "mass at zero" concern did not arise.
   - Clustering: residual ICC by country-within-run is up to about 0.59 (havoc share) and 0.12 to 0.17 (capture share), so run and
     country-within-run random intercepts are warranted.
+
+13.9 Departures and disclosures (Batch F)
+  - OFAT replaces the 100-rep civil13 block (civil_cost_mult 0.7/1.3, gamma 0.12, 30 reps).
+  - S table from main reps < 200 (size limit); P uses all reps.
+  - Ablation/OFAT/calibration reuse production seeds 1000+ (CRN). Seeds are also SHARED across gamma levels and
+    signs, so runs are not independent; run-level random effects and run-clustered SEs probably understate
+    uncertainty somewhat. NOT CHECKED (option: cluster S on seed; compare P with --engine fe).
+  - Validation items in 5.5 skipped before OFAT/production. Git dirty at every run: do not write "fixed before
+    any result was seen" unless git history shows it.
+  - Type-blind rerun at 1000 reps was run AFTER the 100-rep control failed (precision-only).
+  - Rho acts through capture effectiveness and backlash decay (4.2); host rho not a covariate.
+  - AI-assisted code: disclose in the paper.
+  - Sections 8, 13.7, 13.8 stay pilot-only history; Section 14 supersedes them.
+
+
+14. PRODUCTION RESULTS (replaces pilot figures; descriptive, from logs/summary.txt)
+-----------------------------------------------------------------------------------
+14.1 Manipulation check (main block; collapses per country / exit fraction; rivalry, collusion)
+  gamma 0.04: 0.133, 0.136 / 0.006, 0.019   0.08: 0.803, 0.871 / 0.093, 0.115   0.12: 2.359, 2.579 / 0.235, 0.249
+  0.16: 4.323, 4.649 / 0.329, 0.331          0.20: 5.985, 6.357 / 0.392, 0.395
+  Monotone in gamma for both signs. Exit is slightly HIGHER under collusion at every gamma (expectation was
+  higher under rivalry). Known deviation: rivalry exit at gamma 0.08 is 0.093 vs target >= 0.10 (5.5d).
+  Population A: exit before outcome window main civil 0.020 / ruling 0.033; exit during window 0.206 / 0.202.
+
+14.2 P: positive slope. Mixed models, population A, share DVs; slopes in SD of DV per SD of E; civil, ruling.
+  main rivalry: capture pooled +0.292 (civil +0.312, ruling +0.271); havoc +0.185 (+0.196, +0.175)
+  main collusion: capture +0.131 (+0.152, +0.108); havoc +0.097 (+0.113, +0.080)
+  Positive for both types in every block/sign. Rate and level DVs have NEGATIVE slopes once foreign presence
+  is controlled (diminishing returns); P is supported for SHARE DVs only.
+  E-slope ladder (OLS diagnostics): adding foreign presence cuts share slopes by ~31-56% (e.g. rivalry capture
+  +0.483 -> +0.333; collusion havoc +0.304 -> +0.134); all stay positive. E_pos carries the positive effect,
+  E_neg ~0 or negative: the eta channel. corr(E, fp_emb) 0.61-0.67. Jackknife: no sign changes.
+  ICC country-within-run: havoc share ~0.57-0.60, capture share ~0.13-0.18; run-level ICC 0.02-0.04.
+
+14.3 P: type similarity (TOST, 15% margin, main block, pop A): NOT equivalent in all four fits.
+  diff (ruling - civil) [90% CI]: rivalry capture -0.041 [-0.051,-0.032], havoc -0.021 [-0.028,-0.014] (equivalent
+  only at 20%); collusion capture -0.044 [-0.055,-0.033], havoc -0.032 [-0.040,-0.025] (not at any margin).
+  Power at 15%: rivalry ~100%, collusion 82% (capture) and 90% (havoc). Civil slopes are steeper: ~11-13%
+  (rivalry), ~29% (collusion). Rate DVs ARE equivalent at 15%; level DVs are not.
+  Head-to-head (pop A): E per SD vs type level effect (ruling - civil): rivalry capture E +0.292 / type +0.113;
+  rivalry havoc +0.185 / +0.109; collusion capture +0.131 / +0.137; collusion havoc +0.097 / +0.102. Unique
+  marginal R2 of E exceeds type's in every main fit, but all are < ~1% and unstable. Raw ruling capture share
+  is higher (rivalry 0.564 vs 0.513; collusion 0.631 vs 0.585) while ruling domestic capture is LOWER (dom_abs
+  0.254 vs 0.269 rivalry) and foreign absolute capture higher (0.295 vs 0.265). Mechanism UNEXPLAINED; do not
+  assert one. 26 of 64 original P fits flagged non-converged (slopes agree closely with the OLS ladder).
+
+14.4 Positive control (type-blind). Original 100 reps: 0/4 equivalent (precision-limited).
+  Rerun, 1000 reps, interior gamma (6,000 runs), pop A: rivalry capture diff +0.000 [-0.009,+0.010] and havoc
+  +0.001 [-0.006,+0.008] equivalent at 0.15/0.10/0.20. Collusion capture +0.016 [+0.005,+0.026] and havoc
+  +0.007 [-0.000,+0.014]: fail at 0.15 and 0.10, pass at 0.20; power at 15% 91% / 87%. Control = 2/4. Script
+  label "PRECISION-LIMITED" is misleading for the collusion failures (power is high): describe as a small
+  residual type interaction under collusion in a block with no built-in asymmetry (~+0.02; main-block gaps are
+  ~-0.04, opposite sign, so the main conclusion stands). 6 of 8 fits flagged non-converged. Margin NOT widened.
+  Disclose: precision-only rerun made after the 100-rep control failed.
+
+14.5 S (pooled logit, run-clustered CR1; OR per +1 SD; type 0/1)
+  main M3: initial capital 1.20 [1.16,1.24]; gamma 2.39 [2.24,2.54]; overlap 1.26 [1.19,1.33]; seized fraction
+  0.29 [0.27,0.32] (PROTECTIVE); E 0.30 [0.28,0.31] (protective); type (ruling) 1.29 [1.22,1.35].
+  type-blind M3: seized 0.29, E 0.27, type 0.92 [0.85,0.99] (small nominal; calibration caveat).
+  Drop-one dBIC (main pooled): seized 3,687; gamma 3,632; E 3,300; overlap 323; initial capital 193; type 89.
+  By sign: rivalry seized 1,883 vs E 808; collusion E 2,525 vs seized 1,763. Type adds almost nothing.
+  AUC main: M0 .783, M1 .842, M2 .879, M3 .881, M4 .945, M5 .909. McFadden M3 = 0.159. M4 (+lagged foreign
+  position) is a near-proxy for the exit rule, not a clean robustness check. Exploratory M5: seized 0.09,
+  recent seizure / prior capital 2.66 (typeblind 0.09, 2.54): consistent with the size/deployment-proxy reading.
+  E is partly mechanical (exit is wealth-based; E tracks position size).
+
+14.6 Robustness. OFAT: 0 of 18 informative estimates (baseline CI excludes null) changed sign or OR side; says
+  nothing about size changes or other gammas. eta=0 ablation: runs complete, results in F23 / ablation_eta0/
+  tables; NOT YET READ. Figures: 24 produced (F01-F25, no F15).
+
+14.7 Docking lite (module level). docking_schaefer.py: resource module with abuse_coef = 0, K = 1, r = s_regen,
+  qE = s_dep x h, start s = 1, constant h in {0.1,...,0.9}, 300 ticks. Equilibria match Schaefer (1954)
+  x* = K(1 - qE/r) exactly (error < 1e-5: 0.941, 0.824, 0.707, 0.590, 0.473). Max path difference vs the
+  continuous solution 0.0013 (h = 0.1) to 0.0115 (h = 0.9): discretization error. Expected by construction
+  (module discretizes Schaefer's equation): an implementation check, not independent validation; does not test
+  the abuse/scarcity extensions or the full model. Citation: Schaefer (1954), Bull. IATTC 1(2): 23-56
+  (some citations give 27-56; verify against the PDF).
+
+14.8 Hypothesis scorecard
+  P (rise with E): SUPPORTED for share DVs, both types, both signs, in part built in via eta (ablation unread).
+  P (similar across types): NOT DEMONSTRATED at 15% in the main block; the gap comes from the home-entanglement
+    design (type-blind interaction ~0 under rivalry).
+  S (asset loss dominates): NOT SUPPORTED as stated. Seized fraction is protective as measured; E matters about as
+    much (which dominates depends on sign); type adds almost nothing (consistent with S).
+  Expectations that failed: higher exit under rivalry (opposite), civil slopes steeper than ruling, ruling exit
+  OR > 1 only in main block (home entanglement).
+
+
+15. OPEN ITEMS / HANDOFF
+------------------------
+  [ ] Read eta=0 ablation (F23, ablation_eta0/tables) and OFAT table; add numbers to 14.6.
+  [ ] Verification: same-seed determinism; hand-recompute one cap_share_mean from one .npz; 21 tests re-run.
+  [ ] Stylized facts 3 (seizure by type after home collapse) and 4 (goodwill plausibility): compute from logs.
+  [ ] Empirical contact (weakest rubric area): case comparison (Anglo-Persian/Iran 1951-53, United Fruit/Guatemala
+      1954, ITT/Chile, Union Miniere/Katanga) as pattern matching ("consistent with"); WGI and World Bank rents as
+      plausibility anchors. Verify every date and outcome.
+  [ ] Statistics to revisit: TOST margins/power; convergence flags; marginal vs McFadden R2; CRN dependence;
+      BIC/AUC with 2.5M rows; why E and seized fraction are mechanically linked to exit; 200-rep S subset.
+  [ ] Figures: refine labels/formatting, then rerun figures only:
+      python analysis/analysis_figures.py --out out --ofat ofat --ablation ablation_eta0
+  [ ] Housekeeping: commit code; .gitignore out/, ofat/, ablation_eta0/, typeblind1000/; README, requirements, ODD,
+      Zenodo release; check no stray ofat/h_star_lo-- style folders (log printed missing spaces; likely copy artifact).
+  [ ] Course Assignment 4: Part 1 answers drafted; Part 2 reuses the same experiment (instructor OK'd; describe
+      extensions instead of repeating). OLIGO is the similar model (Q5); docking lite = Schaefer module check (Q6).
+
 
 APPENDIX: EXAMPLE COMPANIES / FAMILIES TO CONSIDER
 --------------------------------------------------
